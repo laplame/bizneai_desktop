@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ticket #TKT-12345 - BizneAI</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f8fafc;
+            color: #1e293b;
+            line-height: 1.6;
+        }
+
+        .ticket-viewer {
+            min-height: 100vh;
+            background: #f8fafc;
+        }
+
+        .ticket-viewer-header {
+            background: white;
+            border-bottom: 1px solid #e2e8f0;
+            padding: 1rem;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+
+        .header-content {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        .business-info {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .business-logo {
+            width: 48px;
+            height: 48px;
+            background: #3b82f6;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 1.5rem;
+        }
+
+        .business-info h1 {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #1e293b;
+        }
+
+        .business-info p {
+            color: #64748b;
+            font-size: 0.875rem;
+        }
+
+        .header-actions {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .action-btn {
+            background: none;
+            border: none;
+            color: #64748b;
+            cursor: pointer;
+            padding: 0.5rem;
+            border-radius: 6px;
+            transition: all 0.2s ease;
+        }
+
+        .action-btn:hover {
+            background: #f1f5f9;
+            color: #3b82f6;
+        }
+
+        .ticket-viewer-content {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 1rem;
+        }
+
+        .ticket-status {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.75rem 1.5rem;
+            border-radius: 25px;
+            font-weight: 600;
+            font-size: 0.875rem;
+            background: #dcfce7;
+            color: #166534;
+        }
+
+        .ticket-details {
+            background: white;
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+
+        .detail-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.75rem 0;
+            border-bottom: 1px solid #f1f5f9;
+        }
+
+        .detail-row:last-child {
+            border-bottom: none;
+        }
+
+        .detail-row .label {
+            font-weight: 600;
+            color: #374151;
+        }
+
+        .detail-row .value {
+            color: #1e293b;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .payment-method {
+            color: #059669;
+            font-weight: 600;
+        }
+
+        .customer-section {
+            background: white;
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+
+        .customer-section h3 {
+            margin-bottom: 1rem;
+            color: #1e293b;
+            font-size: 1.1rem;
+            font-weight: 600;
+        }
+
+        .customer-info p {
+            margin: 0.5rem 0;
+            color: #374151;
+            font-size: 0.875rem;
+        }
+
+        .items-section {
+            margin-bottom: 1.5rem;
+        }
+
+        .items-section h3 {
+            margin-bottom: 1rem;
+            color: #1e293b;
+            font-size: 1.1rem;
+            font-weight: 600;
+        }
+
+        .items-list {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .item-card {
+            background: white;
+            border-radius: 12px;
+            padding: 1rem;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+
+        .item-header {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            margin-bottom: 0.75rem;
+        }
+
+        .item-icon {
+            width: 40px;
+            height: 40px;
+            background: #f1f5f9;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #64748b;
+        }
+
+        .item-info {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+        }
+
+        .item-name {
+            font-weight: 600;
+            color: #1e293b;
+            font-size: 0.875rem;
+        }
+
+        .item-category {
+            color: #64748b;
+            font-size: 0.75rem;
+        }
+
+        .item-quantity {
+            background: #3b82f6;
+            color: white;
+            padding: 0.25rem 0.75rem;
+            border-radius: 20px;
+            font-weight: 600;
+            font-size: 0.875rem;
+        }
+
+        .item-details {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-top: 0.75rem;
+            border-top: 1px solid #f1f5f9;
+        }
+
+        .item-price {
+            color: #64748b;
+            font-size: 0.875rem;
+        }
+
+        .item-total {
+            font-weight: 600;
+            color: #059669;
+            font-size: 0.875rem;
+        }
+
+        .totals-section {
+            background: white;
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+
+        .total-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.5rem 0;
+            font-size: 0.875rem;
+        }
+
+        .total-row.total-final {
+            border-top: 2px solid #e2e8f0;
+            margin-top: 0.5rem;
+            padding-top: 1rem;
+            font-weight: 700;
+            font-size: 1.1rem;
+            color: #059669;
+        }
+
+        .ticket-footer {
+            background: white;
+            border-radius: 12px;
+            padding: 1.5rem;
+            text-align: center;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+
+        .ticket-footer p {
+            margin: 0.5rem 0;
+            color: #374151;
+        }
+
+        .ticket-footer p:first-child {
+            font-weight: 600;
+            color: #059669;
+            font-size: 1.1rem;
+        }
+
+        .verification-info {
+            margin-top: 1rem;
+            padding-top: 1rem;
+            border-top: 1px solid #f1f5f9;
+        }
+
+        .verification-info p {
+            color: #059669;
+            font-weight: 500;
+            font-size: 0.875rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .verification-info small {
+            color: #64748b;
+            font-size: 0.75rem;
+        }
+
+        @media (max-width: 768px) {
+            .ticket-viewer-content {
+                padding: 0.5rem;
+            }
+            
+            .header-content {
+                flex-direction: column;
+                gap: 1rem;
+                text-align: center;
+            }
+            
+            .business-info {
+                flex-direction: column;
+                gap: 0.5rem;
+            }
+            
+            .item-header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 0.5rem;
+            }
+            
+            .item-quantity {
+                align-self: flex-end;
+            }
+            
+            .item-details {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 0.5rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="ticket-viewer">
+        <div class="ticket-viewer-header">
+            <div class="header-content">
+                <div class="business-info">
+                    <div class="business-logo">📄</div>
+                    <div>
+                        <h1>BizneAI</h1>
+                        <p>Café & Delicatessen</p>
+                    </div>
+                </div>
+                <div class="header-actions">
+                    <button class="action-btn" title="Compartir">📤</button>
+                    <button class="action-btn" title="Descargar">⬇️</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="ticket-viewer-content">
+            <div class="ticket-status">
+                <div class="status-badge">
+                    ✅ Ticket Válido
+                </div>
+            </div>
+
+            <div class="ticket-details">
+                <div class="detail-row">
+                    <span class="label">Ticket #:</span>
+                    <span class="value">TKT-12345</span>
+                </div>
+                <div class="detail-row">
+                    <span class="label">Fecha:</span>
+                    <span class="value">
+                        📅 15/01/2024
+                    </span>
+                </div>
+                <div class="detail-row">
+                    <span class="label">Hora:</span>
+                    <span class="value">
+                        🕐 14:30:25
+                    </span>
+                </div>
+                <div class="detail-row">
+                    <span class="label">Método de Pago:</span>
+                    <span class="value payment-method">
+                        💳 Tarjeta
+                    </span>
+                </div>
+            </div>
+
+            <div class="customer-section">
+                <h3>Cliente</h3>
+                <div class="customer-info">
+                    <p><strong>María González</strong></p>
+                    <p>maria.gonzalez@email.com</p>
+                    <p>+52 55 1234 5678</p>
+                </div>
+            </div>
+
+            <div class="items-section">
+                <h3>Productos</h3>
+                <div class="items-list">
+                    <div class="item-card">
+                        <div class="item-header">
+                            <div class="item-icon">☕</div>
+                            <div class="item-info">
+                                <span class="item-name">Café Americano</span>
+                                <span class="item-category">Bebidas</span>
+                            </div>
+                            <div class="item-quantity">
+                                x2
+                            </div>
+                        </div>
+                        <div class="item-details">
+                            <span class="item-price">$2.50 c/u</span>
+                            <span class="item-total">$5.00</span>
+                        </div>
+                    </div>
+
+                    <div class="item-card">
+                        <div class="item-header">
+                            <div class="item-icon">🥐</div>
+                            <div class="item-info">
+                                <span class="item-name">Croissant</span>
+                                <span class="item-category">Panadería</span>
+                            </div>
+                            <div class="item-quantity">
+                                x1
+                            </div>
+                        </div>
+                        <div class="item-details">
+                            <span class="item-price">$2.00 c/u</span>
+                            <span class="item-total">$2.00</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="totals-section">
+                <div class="total-row">
+                    <span>Subtotal:</span>
+                    <span>$7.00</span>
+                </div>
+                <div class="total-row">
+                    <span>IVA (16%):</span>
+                    <span>$1.12</span>
+                </div>
+                <div class="total-row total-final">
+                    <span>Total:</span>
+                    <span>$8.12</span>
+                </div>
+            </div>
+
+            <div class="ticket-footer">
+                <p>¡Gracias por tu compra!</p>
+                <p>Este ticket es válido como comprobante de pago</p>
+                <div class="verification-info">
+                    <p>Ticket verificado y autenticado por BizneAI</p>
+                    <small>ID de verificación: TKT-12345</small>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html> 

@@ -1,0 +1,276 @@
+{
+  "name": "bizneai",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Sistema de Punto de Venta Moderno con Tickets Virtuales y Blockchain Luxae",
+  "author": {
+    "name": "BizneAI Team",
+    "email": "info@bizneai.com"
+  },
+  "license": "MIT",
+  "type": "module",
+  "main": "electron/main.js",
+  "homepage": "./",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bizneai/pos-system.git"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "lint": "eslint .",
+    "preview": "vite preview",
+    "electron": "electron .",
+    "electron:dev": "concurrently \"npm run dev\" \"wait-on tcp:localhost:5173 tcp:localhost:5174 tcp:localhost:5175 tcp:localhost:5176 tcp:localhost:3000 && electron .\"",
+    "electron:build": "npm run build && electron-builder",
+    "dist": "npm run build && electron-builder",
+    "dist:mac": "npm run fix-deps && npm run build && electron-builder --mac",
+    "dist:win": "npm run fix-deps && npm run build && electron-builder --win",
+    "dist:linux": "npm run fix-deps && npm run build && electron-builder --linux",
+    "pack": "npm run build && electron-builder --dir",
+    "pack:mac": "npm run build && electron-builder --dir --mac",
+    "pack:win": "npm run build && electron-builder --dir --win",
+    "fix-deps": "node scripts/fix-dependencies.cjs",
+    "blockchain:init": "node blockchain/luxaeBlockhain/scripts/init-blockchain.js",
+    "blockchain:start": "node blockchain/luxaeBlockhain/scripts/start-validator.js",
+    "blockchain:api": "node blockchain/luxaeBlockhain/scripts/start-api-v2.js",
+    "blockchain:keys": "node blockchain/luxaeBlockhain/scripts/generate-keys.js",
+    "blockchain:monitor": "node blockchain/luxaeBlockhain/scripts/monitor-network.js",
+    "blockchain:info": "node blockchain/luxaeBlockhain/scripts/get-node-info.js",
+    "blockchain:genesis": "node blockchain/luxaeBlockhain/scripts/deploy-genesis.js",
+    "blockchain:dev": "concurrently \"nodemon --watch blockchain/luxaeBlockhain/src --ext js,json --exec 'node blockchain/luxaeBlockhain/scripts/start-validator.js'\" \"nodemon --watch blockchain/luxaeBlockhain/src --ext js,json --exec 'node blockchain/luxaeBlockhain/scripts/start-api-v2.js'\"",
+    "start:all": "concurrently \"npm run dev\" \"npm run blockchain:start\" \"wait-on tcp:localhost:5173 tcp:localhost:5174 tcp:localhost:5175 tcp:localhost:5176 tcp:localhost:3000 && electron .\"",
+    "generate-icons": "node scripts/generate-icons.js",
+    "build-desktop": "node scripts/build-desktop.js",
+    "build-desktop:mac": "npm run fix-deps && npm run build && electron-builder --mac",
+    "build-desktop:win": "npm run fix-deps && npm run build && electron-builder --win",
+    "build-desktop:linux": "npm run fix-deps && npm run build && electron-builder --linux",
+    "build-desktop:all": "npm run fix-deps && npm run build && electron-builder -mwl"
+  },
+  "dependencies": {
+    "@chainsafe/libp2p-noise": "^11.0.4",
+    "@ethereumjs/blockchain": "^7.3.0",
+    "@ethereumjs/common": "^4.4.0",
+    "@ethereumjs/statemanager": "^2.4.0",
+    "@ethereumjs/tx": "^5.4.0",
+    "@ethereumjs/util": "^9.1.0",
+    "@ethereumjs/vm": "^8.1.1",
+    "@libp2p/bootstrap": "^8.0.0",
+    "@libp2p/interface-peer-info": "^1.0.6",
+    "@libp2p/mplex": "^8.0.4",
+    "@libp2p/peer-id": "^4.2.4",
+    "@libp2p/peer-id-factory": "^4.0.0",
+    "@libp2p/peer-store": "^9.0.12",
+    "@libp2p/tcp": "^7.0.3",
+    "@multiformats/multiaddr": "^12.1.14",
+    "@openzeppelin/contracts": "^4.9.6",
+    "axios": "^1.7.9",
+    "better-sqlite3": "^12.2.0",
+    "call-bind-apply-helpers": "^1.0.2",
+    "chalk": "^5.4.1",
+    "cloudinary": "^2.7.0",
+    "cors": "^2.8.5",
+    "crypto-js": "^4.2.0",
+    "ethereumjs-util": "^7.1.5",
+    "express": "^5.1.0",
+    "express-rate-limit": "^7.5.0",
+    "express-validator": "^7.2.1",
+    "helmet": "^8.1.0",
+    "level": "^9.0.0",
+    "libp2p": "^0.45.9",
+    "lucide-react": "^0.525.0",
+    "morgan": "^1.10.1",
+    "multer": "^2.0.2",
+    "quagga": "^0.12.1",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "react-hot-toast": "^2.5.2",
+    "socket.io": "^4.8.1",
+    "solc": "0.8.20",
+    "sqlite3": "^5.1.7",
+    "stripe": "^18.3.0",
+    "swagger-jsdoc": "^6.2.8",
+    "swagger-ui-express": "^5.0.1",
+    "web3": "^4.16.0",
+    "ws": "^8.18.3",
+    "zod": "^4.0.10"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.30.1",
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "@nomiclabs/hardhat-ethers": "^2.2.3",
+    "@types/chai": "^4.3.11",
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "@vitejs/plugin-react": "^4.6.0",
+    "chai": "^4.5.0",
+    "concurrently": "^8.2.2",
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8",
+    "eslint": "^9.30.1",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "eslint-plugin-react-refresh": "^0.4.20",
+    "ethers": "^6.13.5",
+    "globals": "^16.3.0",
+    "hardhat": "^2.22.18",
+    "nodemon": "^3.1.0",
+    "typescript": "~5.8.3",
+    "typescript-eslint": "^8.35.1",
+    "vite": "^7.0.4",
+    "wait-on": "^7.2.0"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "build": {
+    "appId": "com.bizneai.pos",
+    "productName": "BizneAI POS",
+    "copyright": "Copyright © 2024 BizneAI Team",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "blockchain/**/*",
+      "node_modules/**/*",
+      "package.json",
+      "!node_modules/.cache/**/*",
+      "!node_modules/.vite/**/*",
+      "!node_modules/.bin/**/*",
+      "!node_modules/*/test/**/*",
+      "!node_modules/*/tests/**/*",
+      "!node_modules/*/docs/**/*",
+      "!node_modules/*/examples/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "public",
+        "to": "public"
+      },
+      {
+        "from": "blockchain/luxaeBlockhain/data",
+        "to": "blockchain/data"
+      }
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "node_modules/call-bind-apply-helpers/**/*",
+      "node_modules/call-bind/**/*",
+      "node_modules/get-intrinsic/**/*",
+      "node_modules/side-channel/**/*",
+      "node_modules/dunder-proto/**/*",
+      "node_modules/get-proto/**/*",
+      "node_modules/better-sqlite3/**/*",
+      "node_modules/sqlite3/**/*",
+      "node_modules/classic-level/**/*",
+      "node_modules/level/**/*",
+      "node_modules/express/**/*",
+      "node_modules/qs/**/*",
+      "node_modules/cloudinary/**/*",
+      "node_modules/multer/**/*",
+      "node_modules/cors/**/*",
+      "node_modules/helmet/**/*",
+      "node_modules/morgan/**/*",
+      "node_modules/socket.io/**/*",
+      "node_modules/ws/**/*",
+      "node_modules/axios/**/*",
+      "node_modules/stripe/**/*",
+      "node_modules/zod/**/*",
+      "node_modules/quagga/**/*",
+      "node_modules/lucide-react/**/*",
+      "node_modules/react-hot-toast/**/*"
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "icon": "build/icon.icns",
+      "darkModeSupport": true,
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "requestedExecutionLevel": "asInvoker"
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png",
+      "category": "Office"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "BizneAI POS"
+    },
+    "dmg": {
+      "title": "BizneAI POS Installer",
+      "icon": "build/icon.icns",
+      "background": "build/background.png",
+      "window": {
+        "width": 540,
+        "height": 380
+      },
+      "contents": [
+        {
+          "x": 130,
+          "y": 220
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ],
+      "format": "ULFO"
+    }
+  }
+}
