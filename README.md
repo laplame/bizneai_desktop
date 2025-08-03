@@ -1,210 +1,210 @@
-# 🚀 BizneAI POS System with Blockchain Integration
+# �� BizneAI POS System
 
-A modern Point of Sale (POS) system with integrated blockchain mining capabilities, built with React, TypeScript, and Electron.
+Un sistema de punto de venta moderno y completo con integración blockchain, gestión de productos con IA, y soporte multi-plataforma.
 
-## ✨ Features
+## ✨ Características Principales
 
-### 🛍️ POS System
-- **Modern UI**: Clean, responsive interface with real-time updates
-- **Product Management**: Add, edit, and manage products with categories
-- **Barcode Scanning**: Integrated barcode scanner for quick product lookup
-- **Customer Management**: Track customer information and purchase history
-- **Sales Reports**: Comprehensive reporting and analytics
-- **Virtual Tickets**: Digital receipts and ticket management
-- **Settings Management**: Configurable system settings
+### 🛍️ Gestión de Productos
+- **Subida de productos con IA**: Detección automática de productos similares
+- **Optimización de imágenes**: Integración con Cloudinary para procesamiento automático
+- **Categorización inteligente**: Sistema de categorías jerárquicas
+- **Escaneo de códigos de barras**: Soporte para múltiples formatos
 
-### ⛏️ Blockchain Integration
-- **Luxae Blockchain**: Integrated Proof of Stake (PoS) blockchain
-- **Mining Operations**: Start/stop mining with real-time statistics
-- **Wallet Management**: View balances and transaction history
-- **Blockchain Explorer**: Real-time blockchain data and statistics
-- **API Integration**: RESTful API for blockchain operations
+### 💰 Sistema de Pagos
+- **Múltiples métodos de pago**: Tarjeta, efectivo, transferencias
+- **Pagos con criptomonedas**: Soporte para Bitcoin, Ethereum, Luxae
+- **Gestión de tickets virtuales**: Generación automática de comprobantes
+- **Reportes de ventas**: Análisis detallado de transacciones
 
-## 🚀 Quick Start
+### 🔗 Integración Blockchain
+- **Blockchain Luxae**: Red privada para transacciones seguras
+- **Smart Contracts**: Contratos inteligentes para promociones y descuentos
+- **Minería integrada**: Sistema de recompensas para validadores
+- **API REST completa**: Endpoints para integración externa
 
-### Prerequisites
-- Node.js 18+ 
-- npm or yarn
+### 🏪 Gestión de Negocios
+- **Múltiples tiendas**: Soporte para cadenas de comercios
+- **Gestión de inventario**: Control automático de stock
+- **Sistema de cocina**: Órdenes en tiempo real
+- **Lista de espera**: Gestión de clientes en espera
 
-### Installation
+## 🛠️ Tecnologías Utilizadas
 
-1. **Clone the repository**
-   ```bash
-   git clone <repository-url>
-   cd BizneAi
-   ```
+### Frontend
+- **React 19** con TypeScript
+- **Vite** para desarrollo rápido
+- **Lucide React** para iconografía
+- **React Hot Toast** para notificaciones
 
-2. **Install dependencies**
-   ```bash
-   npm install --legacy-peer-deps
-   ```
+### Backend
+- **Node.js** con Express
+- **SQLite** para base de datos local
+- **Multer** para manejo de archivos
+- **Zod** para validación de esquemas
 
-3. **Start the application**
-   ```bash
-   # Start everything (POS + Blockchain)
-   npm run start:all
-   
-   # Or start components individually
-   npm run dev                    # Start POS frontend
-   npm run blockchain:start       # Start blockchain node
-   npm run electron:dev           # Start Electron app
-   ```
+### Desktop
+- **Electron** para aplicación de escritorio
+- **electron-builder** para empaquetado
+- **Soporte multi-plataforma**: Windows, macOS, Linux
 
-## 🏗️ Architecture
+### Blockchain
+- **Luxae Blockchain**: Red privada personalizada
+- **Web3.js** para interacción con blockchain
+- **Smart Contracts** en Solidity
+- **P2P Networking** con libp2p
 
-```
-BizneAI POS (Electron App)
-├── Main Process (electron/main.js)
-│   ├── Simple Blockchain Service
-│   └── IPC Communication
-├── Renderer Process (React App)
-│   ├── BlockchainMining Component
-│   └── Blockchain API Integration
-└── Blockchain Node
-    ├── Validator Node
-    ├── API Server
-    └── Mining Operations
-```
+## 📦 Instalación
 
-## 🔧 Available Scripts
+### Prerrequisitos
+- Node.js 16+ 
+- npm o yarn
+- Git
 
-### Development
+### Instalación Local
 ```bash
-npm run dev                    # Start development server
-npm run build                  # Build for production
-npm run electron:dev          # Start Electron with blockchain
-npm run start:all             # Start everything (POS + Blockchain)
+# Clonar el repositorio
+git clone https://github.com/laplame/bizneai_desktop.git
+cd bizneai_desktop
+
+# Instalar dependencias
+npm install
+
+# Ejecutar en modo desarrollo
+npm run dev
 ```
 
-### Blockchain Management
+### Construir Instaladores
+
+#### macOS
 ```bash
-npm run blockchain:start       # Start blockchain node
-npm run blockchain:api         # Start blockchain API
-npm run blockchain:status      # Check blockchain status
-npm run blockchain:keys        # Generate new keys
-npm run blockchain:monitor     # Monitor network
-npm run blockchain:info        # Get node information
+npm run dist:mac
 ```
 
-### Build & Distribution
+#### Windows
 ```bash
-npm run electron:build         # Build Electron app
-npm run dist                   # Build distribution packages
-npm run dist:mac              # Build for macOS
-npm run dist:win              # Build for Windows
-npm run dist:linux            # Build for Linux
+npm run dist:win
 ```
 
-## 🎯 Usage
-
-### POS System
-1. **Start the application**: Run `npm run start:all`
-2. **Add products**: Use the product management interface
-3. **Process sales**: Scan barcodes or select products
-4. **Generate reports**: View sales analytics and reports
-5. **Manage customers**: Track customer information
-
-### Blockchain Mining
-1. **Access mining interface**: Navigate to "Minería" in the sidebar
-2. **Start blockchain node**: Click "Start Node" to initialize
-3. **Begin mining**: Click "Start Mining" to begin operations
-4. **Monitor statistics**: View real-time mining data
-5. **Manage wallet**: Check balances and transaction history
-
-## 📊 Blockchain Features
-
-### Node Management
-- **Start/Stop Node**: Initialize and manage blockchain node
-- **Status Monitoring**: Real-time node health checks
-- **API Integration**: RESTful API for blockchain operations
-
-### Mining Operations
-- **Proof of Stake**: PoS consensus mechanism
-- **Real-time Statistics**: Hash rate, difficulty, block information
-- **Mining Rewards**: Earn tokens for successful validation
-- **Automatic Mining**: Continuous mining simulation
-
-### Wallet Features
-- **Balance Check**: View wallet balances in LXA tokens
-- **Transaction History**: Track past transactions
-- **Address Management**: Manage multiple wallet addresses
-
-## 🔐 Security Features
-
-- **Context Isolation**: Electron security with isolated renderer process
-- **IPC Communication**: Secure communication between processes
-- **Process Management**: Graceful startup and shutdown
-- **Error Handling**: Comprehensive error handling and recovery
-
-## 📈 Monitoring
-
-### Real-time Statistics
-- Blockchain node status
-- Mining operations status
-- Hash rate and difficulty
-- Transaction count and pending transactions
-- Wallet balances
-
-### API Endpoints
-- `GET /health` - API health check
-- `GET /api/v2/blockchain/status` - Blockchain status
-- `GET /api/v2/mining/status` - Mining status
-- `POST /api/v2/mining/start` - Start mining
-- `POST /api/v2/mining/stop` - Stop mining
-- `GET /api/v2/wallet/{address}` - Get wallet information
-- `POST /api/v2/transactions` - Send transaction
-
-## 🚨 Troubleshooting
-
-### Common Issues
-
-1. **Blockchain won't start**
-   ```bash
-   # Check if ports are available
-   lsof -i :3001
-   
-   # Restart blockchain
-   npm run blockchain:stop
-   npm run blockchain:start
-   ```
-
-2. **API not responding**
-   ```bash
-   # Check API health
-   curl http://localhost:3001/health
-   ```
-
-3. **Mining not working**
-   ```bash
-   # Check mining status
-   curl http://localhost:3001/api/v2/mining/status
-   ```
-
-### Debug Mode
+#### Linux
 ```bash
-# Start with debug logging
-DEBUG=* npm run blockchain:start
+npm run dist:linux
 ```
 
-## 📚 Documentation
+## 🔧 Scripts Disponibles
 
-- [Blockchain Integration Guide](BLOCKCHAIN_INTEGRATION.md)
-- [API Documentation](http://localhost:3001/api-docs) (when running)
-- [Electron Documentation](https://www.electronjs.org/docs)
-- [React Documentation](https://reactjs.org/docs)
+### Desarrollo
+```bash
+npm run dev              # Iniciar servidor de desarrollo
+npm run build            # Construir para producción
+npm run lint             # Ejecutar ESLint
+```
 
-## 🤝 Contributing
+### Blockchain
+```bash
+npm run blockchain:init  # Inicializar blockchain
+npm run blockchain:start # Iniciar validador
+npm run blockchain:api   # Iniciar API blockchain
+```
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Test the blockchain integration
-5. Submit a pull request
+### Instaladores
+```bash
+npm run fix-deps         # Reparar dependencias
+npm run dist:mac         # Construir para macOS
+npm run dist:win         # Construir para Windows
+npm run dist:linux       # Construir para Linux
+```
 
-## 📄 License
+## 🚀 Características Avanzadas
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+### IA y Machine Learning
+- **Detección de similitud de productos**: Algoritmos de comparación de imágenes
+- **Categorización automática**: Clasificación inteligente de productos
+- **Optimización de inventario**: Predicción de demanda
+
+### Seguridad
+- **Cifrado de datos**: Protección de información sensible
+- **Autenticación multi-factor**: Múltiples niveles de seguridad
+- **Auditoría completa**: Registro de todas las transacciones
+
+### Integración
+- **APIs RESTful**: Endpoints para integración externa
+- **Webhooks**: Notificaciones en tiempo real
+- **Exportación de datos**: Múltiples formatos (CSV, JSON, XML)
+
+## 📁 Estructura del Proyecto
+
+```
+bizneai_desktop/
+├── src/                    # Código fuente principal
+│   ├── components/         # Componentes React
+│   ├── api/               # Cliente API
+│   ├── types/             # Definiciones TypeScript
+│   └── utils/             # Utilidades
+├── server/                # Backend Express
+│   ├── src/
+│   │   ├── routes/        # Rutas API
+│   │   ├── middleware/    # Middleware
+│   │   └── schemas/       # Esquemas de validación
+├── blockchain/            # Integración blockchain
+│   └── luxaeBlockhain/    # Código blockchain
+├── electron/              # Configuración Electron
+├── scripts/               # Scripts de automatización
+└── build/                 # Recursos de construcción
+```
+
+## 🔧 Solución de Problemas
+
+### Error de Módulos
+Si encuentras el error `Cannot find module 'call-bind-apply-helpers'`:
+
+```bash
+npm run fix-deps
+npm run dist:mac
+```
+
+### Problemas de Construcción
+```bash
+# Limpiar caché
+rm -rf node_modules package-lock.json
+npm install
+npm run fix-deps
+```
+
+## 📚 Documentación
+
+- [Guía de Instalación](INSTALLERS.md)
+- [Solución de Problemas](TROUBLESHOOTING.md)
+- [Integración Blockchain](BLOCKCHAIN_INTEGRATION.md)
+- [Sistema de Base de Datos](DATABASE_SYSTEM.md)
+
+## 🤝 Contribuir
+
+1. Fork el proyecto
+2. Crear una rama para tu feature (`git checkout -b feature/AmazingFeature`)
+3. Commit tus cambios (`git commit -m 'Add some AmazingFeature'`)
+4. Push a la rama (`git push origin feature/AmazingFeature`)
+5. Abrir un Pull Request
+
+## 📄 Licencia
+
+Este proyecto está bajo la Licencia MIT - ver el archivo [LICENSE](LICENSE) para detalles.
+
+## 📞 Soporte
+
+- **GitHub Issues**: [Reportar problemas](https://github.com/laplame/bizneai_desktop/issues)
+- **Documentación**: [Guías completas](https://docs.bizneai.com)
+- **Email**: support@bizneai.com
+
+## 🎯 Roadmap
+
+- [ ] Integración con más criptomonedas
+- [ ] Sistema de fidelización con tokens
+- [ ] Análisis avanzado de datos
+- [ ] Integración con sistemas contables
+- [ ] App móvil complementaria
 
 ---
 
-**Note**: The blockchain functionality is only available in the Electron desktop application. The web version will show a message indicating that blockchain features are desktop-only.
+**Desarrollado con ❤️ por el equipo BizneAI**
+
+*Versión 1.0.0 - Julio 2024*
