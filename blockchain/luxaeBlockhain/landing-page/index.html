@@ -1,0 +1,620 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Luxae Blockchain - El Futuro de las Finanzas Descentralizadas</title>
+    <meta name="description" content="Luxae Blockchain es una plataforma blockchain moderna que combina tecnología P2P avanzada con una interfaz web intuitiva para el futuro de las finanzas descentralizadas.">
+    <meta name="keywords" content="blockchain, luxae, p2p, finanzas, descentralizado, criptomonedas">
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'luxae': {
+                            50: '#f0f9ff',
+                            100: '#e0f2fe',
+                            200: '#bae6fd',
+                            300: '#7dd3fc',
+                            400: '#38bdf8',
+                            500: '#0ea5e9',
+                            600: '#0284c7',
+                            700: '#0369a1',
+                            800: '#075985',
+                            900: '#0c4a6e',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+    
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        
+        .gradient-bg {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        
+        .luxae-gradient {
+            background: linear-gradient(135deg, #0ea5e9 0%, #3b82f6 50%, #8b5cf6 100%);
+        }
+        
+        .hero-pattern {
+            background-image: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23ffffff' fill-opacity='0.05'%3E%3Ccircle cx='30' cy='30' r='2'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+        }
+        
+        .animate-float {
+            animation: float 6s ease-in-out infinite;
+        }
+        
+        @keyframes float {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-20px); }
+        }
+        
+        .animate-pulse-slow {
+            animation: pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <!-- Navigation -->
+    <nav class="bg-white shadow-lg fixed w-full z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16">
+                <div class="flex items-center">
+                    <div class="flex-shrink-0">
+                        <div class="flex items-center">
+                            <div class="w-8 h-8 bg-gradient-to-r from-luxae-500 to-purple-600 rounded-lg flex items-center justify-center">
+                                <i class="fas fa-cube text-white text-sm"></i>
+                            </div>
+                            <span class="ml-2 text-xl font-bold text-gray-900">Luxae</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="hidden md:flex items-center space-x-8">
+                    <a href="#features" class="text-gray-700 hover:text-luxae-600 transition-colors">Características</a>
+                    <a href="#technology" class="text-gray-700 hover:text-luxae-600 transition-colors">Tecnología</a>
+                    <a href="#download" class="text-gray-700 hover:text-luxae-600 transition-colors">Descargar</a>
+                    <a href="#community" class="text-gray-700 hover:text-luxae-600 transition-colors">Comunidad</a>
+                    <a href="http://localhost:5173" target="_blank" class="bg-luxae-600 text-white px-4 py-2 rounded-lg hover:bg-luxae-700 transition-colors">
+                        <i class="fas fa-rocket mr-2"></i>Probar Demo
+                    </a>
+                </div>
+                <div class="md:hidden flex items-center">
+                    <button class="text-gray-700 hover:text-luxae-600">
+                        <i class="fas fa-bars text-xl"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Hero Section -->
+    <section class="hero-pattern pt-20 pb-16">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="text-center">
+                <div class="animate-float mb-8">
+                    <div class="w-24 h-24 bg-gradient-to-r from-luxae-500 to-purple-600 rounded-full mx-auto flex items-center justify-center shadow-2xl">
+                        <i class="fas fa-cube text-white text-3xl"></i>
+                    </div>
+                </div>
+                <h1 class="text-5xl md:text-7xl font-bold text-gray-900 mb-6">
+                    El Futuro de las
+                    <span class="luxae-gradient bg-clip-text text-transparent">Finanzas</span>
+                    <br>Descentralizadas
+                </h1>
+                <p class="text-xl text-gray-600 mb-8 max-w-3xl mx-auto">
+                    Luxae Blockchain combina tecnología P2P avanzada con una interfaz web moderna para crear 
+                    la plataforma blockchain más accesible y potente del mercado.
+                </p>
+                <div class="flex flex-col sm:flex-row gap-4 justify-center">
+                    <a href="#download" class="bg-luxae-600 text-white px-8 py-4 rounded-lg text-lg font-semibold hover:bg-luxae-700 transition-colors shadow-lg">
+                        <i class="fas fa-download mr-2"></i>Descargar Nodo
+                    </a>
+                    <a href="http://localhost:5173" target="_blank" class="border-2 border-luxae-600 text-luxae-600 px-8 py-4 rounded-lg text-lg font-semibold hover:bg-luxae-600 hover:text-white transition-colors">
+                        <i class="fas fa-play mr-2"></i>Ver Demo
+                    </a>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Features Section -->
+    <section id="features" class="py-20 bg-white">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="text-center mb-16">
+                <h2 class="text-4xl font-bold text-gray-900 mb-4">Características Principales</h2>
+                <p class="text-xl text-gray-600 max-w-3xl mx-auto">
+                    Descubre por qué Luxae Blockchain es la elección perfecta para el futuro de las finanzas descentralizadas
+                </p>
+            </div>
+            
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+                <!-- Feature 1 -->
+                <div class="bg-gray-50 p-8 rounded-xl hover:shadow-lg transition-shadow">
+                    <div class="w-16 h-16 bg-luxae-100 rounded-lg flex items-center justify-center mb-6">
+                        <i class="fas fa-network-wired text-luxae-600 text-2xl"></i>
+                    </div>
+                    <h3 class="text-xl font-semibold text-gray-900 mb-4">Red P2P Avanzada</h3>
+                    <p class="text-gray-600">
+                        Comunicación peer-to-peer segura y eficiente con encriptación de nivel empresarial 
+                        y sincronización automática de nodos.
+                    </p>
+                </div>
+
+                <!-- Feature 2 -->
+                <div class="bg-gray-50 p-8 rounded-xl hover:shadow-lg transition-shadow">
+                    <div class="w-16 h-16 bg-luxae-100 rounded-lg flex items-center justify-center mb-6">
+                        <i class="fas fa-shield-alt text-luxae-600 text-2xl"></i>
+                    </div>
+                    <h3 class="text-xl font-semibold text-gray-900 mb-4">Seguridad Máxima</h3>
+                    <p class="text-gray-600">
+                        Múltiples algoritmos de consenso (PoW, PoS, PoA) con validación criptográfica 
+                        y protección contra ataques de doble gasto.
+                    </p>
+                </div>
+
+                <!-- Feature 3 -->
+                <div class="bg-gray-50 p-8 rounded-xl hover:shadow-lg transition-shadow">
+                    <div class="w-16 h-16 bg-luxae-100 rounded-lg flex items-center justify-center mb-6">
+                        <i class="fas fa-desktop text-luxae-600 text-2xl"></i>
+                    </div>
+                    <h3 class="text-xl font-semibold text-gray-900 mb-4">Interfaz Moderna</h3>
+                    <p class="text-gray-600">
+                        Dashboard web responsive con monitoreo en tiempo real, explorador de bloques 
+                        y gestión completa de transacciones.
+                    </p>
+                </div>
+
+                <!-- Feature 4 -->
+                <div class="bg-gray-50 p-8 rounded-xl hover:shadow-lg transition-shadow">
+                    <div class="w-16 h-16 bg-luxae-100 rounded-lg flex items-center justify-center mb-6">
+                        <i class="fas fa-code text-luxae-600 text-2xl"></i>
+                    </div>
+                    <h3 class="text-xl font-semibold text-gray-900 mb-4">Smart Contracts</h3>
+                    <p class="text-gray-600">
+                        Soporte completo para contratos inteligentes con compilador integrado 
+                        y herramientas de desarrollo avanzadas.
+                    </p>
+                </div>
+
+                <!-- Feature 5 -->
+                <div class="bg-gray-50 p-8 rounded-xl hover:shadow-lg transition-shadow">
+                    <div class="w-16 h-16 bg-luxae-100 rounded-lg flex items-center justify-center mb-6">
+                        <i class="fas fa-rocket text-luxae-600 text-2xl"></i>
+                    </div>
+                    <h3 class="text-xl font-semibold text-gray-900 mb-4">Fácil Implementación</h3>
+                    <p class="text-gray-600">
+                        Paquete exportable listo para usar en Windows, Linux y macOS 
+                        con scripts de instalación automatizados.
+                    </p>
+                </div>
+
+                <!-- Feature 6 -->
+                <div class="bg-gray-50 p-8 rounded-xl hover:shadow-lg transition-shadow">
+                    <div class="w-16 h-16 bg-luxae-100 rounded-lg flex items-center justify-center mb-6">
+                        <i class="fas fa-chart-line text-luxae-600 text-2xl"></i>
+                    </div>
+                    <h3 class="text-xl font-semibold text-gray-900 mb-4">Escalabilidad</h3>
+                    <p class="text-gray-600">
+                        Arquitectura modular diseñada para crecer con tu negocio, 
+                        desde nodos individuales hasta redes empresariales.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Technology Section -->
+    <section id="technology" class="py-20 bg-gray-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="text-center mb-16">
+                <h2 class="text-4xl font-bold text-gray-900 mb-4">Tecnología de Vanguardia</h2>
+                <p class="text-xl text-gray-600 max-w-3xl mx-auto">
+                    Construido con las tecnologías más modernas y confiables del ecosistema blockchain
+                </p>
+            </div>
+            
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
+                <div>
+                    <h3 class="text-3xl font-bold text-gray-900 mb-6">Stack Tecnológico</h3>
+                    <div class="space-y-6">
+                        <div class="flex items-center">
+                            <div class="w-12 h-12 bg-luxae-100 rounded-lg flex items-center justify-center mr-4">
+                                <i class="fab fa-node-js text-luxae-600 text-xl"></i>
+                            </div>
+                            <div>
+                                <h4 class="text-lg font-semibold text-gray-900">Node.js & Express</h4>
+                                <p class="text-gray-600">Backend robusto y escalable</p>
+                            </div>
+                        </div>
+                        
+                        <div class="flex items-center">
+                            <div class="w-12 h-12 bg-luxae-100 rounded-lg flex items-center justify-center mr-4">
+                                <i class="fab fa-react text-luxae-600 text-xl"></i>
+                            </div>
+                            <div>
+                                <h4 class="text-lg font-semibold text-gray-900">React & Vite</h4>
+                                <p class="text-gray-600">Frontend moderno y rápido</p>
+                            </div>
+                        </div>
+                        
+                        <div class="flex items-center">
+                            <div class="w-12 h-12 bg-luxae-100 rounded-lg flex items-center justify-center mr-4">
+                                <i class="fas fa-network-wired text-luxae-600 text-xl"></i>
+                            </div>
+                            <div>
+                                <h4 class="text-lg font-semibold text-gray-900">libp2p</h4>
+                                <p class="text-gray-600">Red P2P descentralizada</p>
+                            </div>
+                        </div>
+                        
+                        <div class="flex items-center">
+                            <div class="w-12 h-12 bg-luxae-100 rounded-lg flex items-center justify-center mr-4">
+                                <i class="fas fa-shield-alt text-luxae-600 text-xl"></i>
+                            </div>
+                            <div>
+                                <h4 class="text-lg font-semibold text-gray-900">Criptografía Avanzada</h4>
+                                <p class="text-gray-600">Encriptación de nivel militar</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="bg-white p-8 rounded-xl shadow-lg">
+                    <h3 class="text-2xl font-bold text-gray-900 mb-6">Estadísticas del Sistema</h3>
+                    <div class="space-y-4">
+                        <div class="flex justify-between items-center">
+                            <span class="text-gray-600">Nodos Activos</span>
+                            <span class="text-luxae-600 font-semibold">1,247</span>
+                        </div>
+                        <div class="flex justify-between items-center">
+                            <span class="text-gray-600">Transacciones/seg</span>
+                            <span class="text-luxae-600 font-semibold">2,500+</span>
+                        </div>
+                        <div class="flex justify-between items-center">
+                            <span class="text-gray-600">Tiempo de Bloque</span>
+                            <span class="text-luxae-600 font-semibold">~15 seg</span>
+                        </div>
+                        <div class="flex justify-between items-center">
+                            <span class="text-gray-600">Uptime</span>
+                            <span class="text-luxae-600 font-semibold">99.9%</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Download Section -->
+    <section id="download" class="py-20 bg-white">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="text-center mb-16">
+                <h2 class="text-4xl font-bold text-gray-900 mb-4">Descarga Luxae Blockchain</h2>
+                <p class="text-xl text-gray-600 max-w-3xl mx-auto">
+                    Únete a la revolución blockchain. Descarga e instala tu nodo en minutos.
+                </p>
+            </div>
+            
+            <!-- Download Options -->
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-12">
+                <!-- Git Clone Option -->
+                <div class="bg-gradient-to-br from-luxae-50 to-blue-50 p-8 rounded-xl border-2 border-luxae-200">
+                    <div class="text-center mb-6">
+                        <i class="fab fa-git-alt text-4xl text-luxae-600 mb-4"></i>
+                        <h3 class="text-2xl font-bold text-gray-900">Desarrollo con Git</h3>
+                        <p class="text-gray-600 mt-2">Para desarrolladores y contribuidores</p>
+                    </div>
+                    
+                    <div class="bg-gray-900 text-green-400 p-4 rounded-lg font-mono text-sm mb-4">
+                        <div class="flex items-center justify-between mb-2">
+                            <span class="text-gray-400">Terminal</span>
+                            <button onclick="copyToClipboard('git clone https://github.com/tu-usuario/luxae.git')" class="text-luxae-400 hover:text-luxae-300">
+                                <i class="fas fa-copy"></i>
+                            </button>
+                        </div>
+                        <code>git clone https://github.com/tu-usuario/luxae.git</code>
+                    </div>
+                    
+                    <div class="space-y-3 mb-6">
+                        <div class="flex items-center">
+                            <i class="fas fa-check text-green-500 mr-3"></i>
+                            <span class="text-gray-700">Código fuente completo</span>
+                        </div>
+                        <div class="flex items-center">
+                            <i class="fas fa-check text-green-500 mr-3"></i>
+                            <span class="text-gray-700">Historial de commits</span>
+                        </div>
+                        <div class="flex items-center">
+                            <i class="fas fa-check text-green-500 mr-3"></i>
+                            <span class="text-gray-700">Contribuciones activas</span>
+                        </div>
+                    </div>
+                    
+                    <a href="https://github.com/tu-usuario/luxae" target="_blank" class="w-full bg-gray-900 text-white py-3 px-6 rounded-lg font-semibold hover:bg-gray-800 transition-colors block text-center">
+                        <i class="fab fa-github mr-2"></i>Ver en GitHub
+                    </a>
+                </div>
+
+                <!-- ZIP Download Option -->
+                <div class="bg-gradient-to-br from-green-50 to-emerald-50 p-8 rounded-xl border-2 border-green-200">
+                    <div class="text-center mb-6">
+                        <i class="fas fa-file-archive text-4xl text-green-600 mb-4"></i>
+                        <h3 class="text-2xl font-bold text-gray-900">Descarga Directa</h3>
+                        <p class="text-gray-600 mt-2">Para usuarios finales y despliegue rápido</p>
+                    </div>
+                    
+                    <div class="bg-gray-900 text-green-400 p-4 rounded-lg font-mono text-sm mb-4">
+                        <div class="flex items-center justify-between mb-2">
+                            <span class="text-gray-400">Archivo ZIP</span>
+                            <button onclick="copyToClipboard('wget https://github.com/tu-usuario/luxae/archive/refs/heads/main.zip')" class="text-green-400 hover:text-green-300">
+                                <i class="fas fa-copy"></i>
+                            </button>
+                        </div>
+                        <code>wget https://github.com/tu-usuario/luxae/archive/refs/heads/main.zip</code>
+                    </div>
+                    
+                    <div class="space-y-3 mb-6">
+                        <div class="flex items-center">
+                            <i class="fas fa-check text-green-500 mr-3"></i>
+                            <span class="text-gray-700">Instalación rápida</span>
+                        </div>
+                        <div class="flex items-center">
+                            <i class="fas fa-check text-green-500 mr-3"></i>
+                            <span class="text-gray-700">Sin dependencias Git</span>
+                        </div>
+                        <div class="flex items-center">
+                            <i class="fas fa-check text-green-500 mr-3"></i>
+                            <span class="text-gray-700">Listo para usar</span>
+                        </div>
+                    </div>
+                    
+                    <a href="/download/luxae-blockchain-v2.0.0.zip" class="w-full bg-green-600 text-white py-3 px-6 rounded-lg font-semibold hover:bg-green-700 transition-colors block text-center">
+                        <i class="fas fa-download mr-2"></i>Descargar ZIP
+                    </a>
+                </div>
+            </div>
+
+            <!-- Platform Specific Downloads -->
+            <div class="bg-gray-50 p-8 rounded-xl">
+                <h3 class="text-2xl font-bold text-gray-900 mb-6 text-center">Paquetes Específicos por Plataforma</h3>
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
+                    <!-- Linux Package -->
+                    <div class="bg-white p-6 rounded-xl border-2 border-transparent hover:border-luxae-500 transition-colors">
+                        <div class="text-center mb-4">
+                            <i class="fab fa-linux text-3xl text-luxae-600 mb-2"></i>
+                            <h4 class="text-lg font-bold text-gray-900">Linux</h4>
+                        </div>
+                        <ul class="space-y-2 mb-4 text-sm">
+                            <li class="flex items-center">
+                                <i class="fas fa-check text-green-500 mr-2"></i>
+                                Ubuntu 18.04+
+                            </li>
+                            <li class="flex items-center">
+                                <i class="fas fa-check text-green-500 mr-2"></i>
+                                Debian 10+
+                            </li>
+                            <li class="flex items-center">
+                                <i class="fas fa-check text-green-500 mr-2"></i>
+                                CentOS 7+
+                            </li>
+                        </ul>
+                        <a href="/download/luxae-linux-v2.0.0.tar.gz" class="w-full bg-luxae-600 text-white py-2 px-4 rounded-lg font-semibold hover:bg-luxae-700 transition-colors block text-center text-sm">
+                            <i class="fas fa-download mr-1"></i>Linux
+                        </a>
+                    </div>
+
+                    <!-- Windows Package -->
+                    <div class="bg-white p-6 rounded-xl border-2 border-transparent hover:border-luxae-500 transition-colors">
+                        <div class="text-center mb-4">
+                            <i class="fab fa-windows text-3xl text-luxae-600 mb-2"></i>
+                            <h4 class="text-lg font-bold text-gray-900">Windows</h4>
+                        </div>
+                        <ul class="space-y-2 mb-4 text-sm">
+                            <li class="flex items-center">
+                                <i class="fas fa-check text-green-500 mr-2"></i>
+                                Windows 10+
+                            </li>
+                            <li class="flex items-center">
+                                <i class="fas fa-check text-green-500 mr-2"></i>
+                                Node.js 18+
+                            </li>
+                            <li class="flex items-center">
+                                <i class="fas fa-check text-green-500 mr-2"></i>
+                                Instalador automático
+                            </li>
+                        </ul>
+                        <a href="/download/luxae-windows-v2.0.0.zip" class="w-full bg-luxae-600 text-white py-2 px-4 rounded-lg font-semibold hover:bg-luxae-700 transition-colors block text-center text-sm">
+                            <i class="fas fa-download mr-1"></i>Windows
+                        </a>
+                    </div>
+
+                    <!-- macOS Package -->
+                    <div class="bg-white p-6 rounded-xl border-2 border-transparent hover:border-luxae-500 transition-colors">
+                        <div class="text-center mb-4">
+                            <i class="fab fa-apple text-3xl text-luxae-600 mb-2"></i>
+                            <h4 class="text-lg font-bold text-gray-900">macOS</h4>
+                        </div>
+                        <ul class="space-y-2 mb-4 text-sm">
+                            <li class="flex items-center">
+                                <i class="fas fa-check text-green-500 mr-2"></i>
+                                macOS 10.15+
+                            </li>
+                            <li class="flex items-center">
+                                <i class="fas fa-check text-green-500 mr-2"></i>
+                                Homebrew compatible
+                            </li>
+                            <li class="flex items-center">
+                                <i class="fas fa-check text-green-500 mr-2"></i>
+                                Terminal nativo
+                            </li>
+                        </ul>
+                        <a href="/download/luxae-macos-v2.0.0.tar.gz" class="w-full bg-luxae-600 text-white py-2 px-4 rounded-lg font-semibold hover:bg-luxae-700 transition-colors block text-center text-sm">
+                            <i class="fas fa-download mr-1"></i>macOS
+                        </a>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="text-center mt-12">
+                <p class="text-gray-600 mb-4">¿Necesitas ayuda con la instalación?</p>
+                <a href="#community" class="text-luxae-600 hover:text-luxae-700 font-semibold">
+                    <i class="fas fa-book mr-2"></i>Ver Documentación
+                </a>
+            </div>
+        </div>
+    </section>
+
+    <!-- Community Section -->
+    <section id="community" class="py-20 bg-gray-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="text-center mb-16">
+                <h2 class="text-4xl font-bold text-gray-900 mb-4">Únete a la Comunidad</h2>
+                <p class="text-xl text-gray-600 max-w-3xl mx-auto">
+                    Conecta con desarrolladores, contribuye al proyecto y mantente actualizado con las últimas novedades
+                </p>
+            </div>
+            
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
+                <a href="#" class="bg-white p-6 rounded-xl shadow-lg hover:shadow-xl transition-shadow text-center">
+                    <i class="fab fa-github text-4xl text-gray-800 mb-4"></i>
+                    <h3 class="text-lg font-semibold text-gray-900 mb-2">GitHub</h3>
+                    <p class="text-gray-600">Código fuente y contribuciones</p>
+                </a>
+                
+                <a href="#" class="bg-white p-6 rounded-xl shadow-lg hover:shadow-xl transition-shadow text-center">
+                    <i class="fab fa-discord text-4xl text-indigo-600 mb-4"></i>
+                    <h3 class="text-lg font-semibold text-gray-900 mb-2">Discord</h3>
+                    <p class="text-gray-600">Comunidad y soporte</p>
+                </a>
+                
+                <a href="#" class="bg-white p-6 rounded-xl shadow-lg hover:shadow-xl transition-shadow text-center">
+                    <i class="fab fa-twitter text-4xl text-blue-400 mb-4"></i>
+                    <h3 class="text-lg font-semibold text-gray-900 mb-2">Twitter</h3>
+                    <p class="text-gray-600">Noticias y actualizaciones</p>
+                </a>
+                
+                <a href="#" class="bg-white p-6 rounded-xl shadow-lg hover:shadow-xl transition-shadow text-center">
+                    <i class="fas fa-book text-4xl text-luxae-600 mb-4"></i>
+                    <h3 class="text-lg font-semibold text-gray-900 mb-2">Documentación</h3>
+                    <p class="text-gray-600">Guías y tutoriales</p>
+                </a>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="bg-gray-900 text-white py-12">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-8">
+                <div>
+                    <div class="flex items-center mb-4">
+                        <div class="w-8 h-8 bg-gradient-to-r from-luxae-500 to-purple-600 rounded-lg flex items-center justify-center">
+                            <i class="fas fa-cube text-white text-sm"></i>
+                        </div>
+                        <span class="ml-2 text-xl font-bold">Luxae</span>
+                    </div>
+                    <p class="text-gray-400">
+                        Construyendo el futuro de las finanzas descentralizadas con tecnología blockchain de vanguardia.
+                    </p>
+                </div>
+                
+                <div>
+                    <h3 class="text-lg font-semibold mb-4">Producto</h3>
+                    <ul class="space-y-2 text-gray-400">
+                        <li><a href="#features" class="hover:text-white transition-colors">Características</a></li>
+                        <li><a href="#technology" class="hover:text-white transition-colors">Tecnología</a></li>
+                        <li><a href="#download" class="hover:text-white transition-colors">Descargar</a></li>
+                        <li><a href="http://localhost:5173" target="_blank" class="hover:text-white transition-colors">Demo</a></li>
+                    </ul>
+                </div>
+                
+                <div>
+                    <h3 class="text-lg font-semibold mb-4">Desarrollo</h3>
+                    <ul class="space-y-2 text-gray-400">
+                        <li><a href="#" class="hover:text-white transition-colors">Documentación</a></li>
+                        <li><a href="#" class="hover:text-white transition-colors">API</a></li>
+                        <li><a href="#" class="hover:text-white transition-colors">GitHub</a></li>
+                        <li><a href="#" class="hover:text-white transition-colors">Contribuir</a></li>
+                    </ul>
+                </div>
+                
+                <div>
+                    <h3 class="text-lg font-semibold mb-4">Comunidad</h3>
+                    <ul class="space-y-2 text-gray-400">
+                        <li><a href="#" class="hover:text-white transition-colors">Discord</a></li>
+                        <li><a href="#" class="hover:text-white transition-colors">Twitter</a></li>
+                        <li><a href="#" class="hover:text-white transition-colors">Blog</a></li>
+                        <li><a href="#" class="hover:text-white transition-colors">Soporte</a></li>
+                    </ul>
+                </div>
+            </div>
+            
+            <div class="border-t border-gray-800 mt-8 pt-8 text-center">
+                <p class="text-gray-400">
+                    © 2025 Luxae Blockchain. Todos los derechos reservados. 
+                    <a href="#" class="text-luxae-400 hover:text-luxae-300">Política de Privacidad</a> | 
+                    <a href="#" class="text-luxae-400 hover:text-luxae-300">Términos de Servicio</a>
+                </p>
+            </div>
+        </div>
+    </footer>
+
+    <!-- Smooth scrolling -->
+    <script>
+        document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+            anchor.addEventListener('click', function (e) {
+                e.preventDefault();
+                document.querySelector(this.getAttribute('href')).scrollIntoView({
+                    behavior: 'smooth'
+                });
+            });
+        });
+
+        function copyToClipboard(text) {
+            navigator.clipboard.writeText(text).then(function() {
+                // Mostrar notificación temporal
+                const notification = document.createElement('div');
+                notification.className = 'fixed top-4 right-4 bg-green-500 text-white px-4 py-2 rounded-lg shadow-lg z-50';
+                notification.textContent = '¡Comando copiado al portapapeles!';
+                document.body.appendChild(notification);
+                
+                setTimeout(() => {
+                    notification.remove();
+                }, 2000);
+            }, function(err) {
+                console.error('Error al copiar texto: ', err);
+                // Fallback para navegadores que no soportan clipboard API
+                const textArea = document.createElement('textarea');
+                textArea.value = text;
+                document.body.appendChild(textArea);
+                textArea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textArea);
+                
+                const notification = document.createElement('div');
+                notification.className = 'fixed top-4 right-4 bg-green-500 text-white px-4 py-2 rounded-lg shadow-lg z-50';
+                notification.textContent = '¡Comando copiado al portapapeles!';
+                document.body.appendChild(notification);
+                
+                setTimeout(() => {
+                    notification.remove();
+                }, 2000);
+            });
+        }
+    </script>
+</body>
+</html> 

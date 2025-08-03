@@ -1,0 +1,38 @@
+@import "tailwindcss";
+
+@theme {
+  --color-luxae-50: #f0f9ff;
+  --color-luxae-100: #e0f2fe;
+  --color-luxae-200: #bae6fd;
+  --color-luxae-300: #7dd3fc;
+  --color-luxae-400: #38bdf8;
+  --color-luxae-500: #0ea5e9;
+  --color-luxae-600: #0284c7;
+  --color-luxae-700: #0369a1;
+  --color-luxae-800: #075985;
+  --color-luxae-900: #0c4a6e;
+}
+
+@layer base {
+  html {
+    font-family: 'Inter', system-ui, sans-serif;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply bg-luxae-600 hover:bg-luxae-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-200;
+  }
+  
+  .btn-secondary {
+    @apply bg-gray-200 hover:bg-gray-300 text-gray-800 font-medium py-2 px-4 rounded-lg transition-colors duration-200;
+  }
+  
+  .card {
+    @apply bg-white rounded-xl shadow-lg border border-gray-200 p-6;
+  }
+  
+  .input-field {
+    @apply w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-luxae-500 focus:border-transparent;
+  }
+}

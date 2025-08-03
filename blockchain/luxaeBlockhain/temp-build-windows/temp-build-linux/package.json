@@ -1,0 +1,87 @@
+{
+  "name": "luxae",
+  "version": "1.0.0",
+  "description": "Luxae - A Proof of Stake Blockchain with ERC-777 Token",
+  "main": "index.js",
+  "dependencies": {
+    "@chainsafe/libp2p-noise": "^11.0.4",
+    "@ethereumjs/blockchain": "^7.3.0",
+    "@ethereumjs/common": "^4.4.0",
+    "@ethereumjs/statemanager": "^2.4.0",
+    "@ethereumjs/tx": "^5.4.0",
+    "@ethereumjs/util": "^9.1.0",
+    "@ethereumjs/vm": "^8.1.1",
+    "@libp2p/bootstrap": "^8.0.0",
+    "@libp2p/interface-peer-info": "^1.0.6",
+    "@libp2p/mplex": "^8.0.4",
+    "@libp2p/peer-id": "^4.2.4",
+    "@libp2p/peer-id-factory": "^4.0.0",
+    "@libp2p/peer-store": "^9.0.12",
+    "@libp2p/tcp": "^7.0.3",
+    "@multiformats/multiaddr": "^12.1.14",
+    "@openzeppelin/contracts": "^4.9.6",
+    "axios": "^1.7.9",
+    "chalk": "^5.4.1",
+    "cors": "^2.8.5",
+    "crypto-js": "^4.2.0",
+    "ethereumjs-util": "^7.1.5",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.5.0",
+    "express-validator": "^7.2.1",
+    "helmet": "^8.0.0",
+    "level": "^9.0.0",
+    "libp2p": "^0.45.9",
+    "solc": "0.8.20",
+    "swagger-jsdoc": "^6.2.8",
+    "swagger-ui-express": "^5.0.1",
+    "web3": "^4.16.0"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "type": "module",
+  "scripts": {
+    "init": "node scripts/init-blockchain.js",
+    "start": "node scripts/start-validator.js",
+    "start:api": "node scripts/start-api.js",
+    "start:api-v2": "node scripts/start-api-v2.js",
+    "generate-keys": "node scripts/generate-keys.js",
+    "test": "node index.js",
+    "monitor": "node src/scripts/monitor-network.js",
+    "node-info": "node scripts/get-node-info.js",
+    "deploy:genesis": "node scripts/deploy-genesis.js",
+    "dev": "concurrently \"nodemon --watch src --ext js,json --exec 'node scripts/start-validator.js'\" \"nodemon --watch src --ext js,json --exec 'node scripts/start-api-v2.js'\" \"pnpm run dev:frontend\"",
+    "dev:frontend": "cd frontend-luxae && npm run dev",
+    "dev:dashboard": "cd dashboard && pnpm run dev",
+    "dev:node": "nodemon --watch src --ext js,json --exec 'node scripts/start-validator.js'",
+    "dev:api": "nodemon --watch src --ext js,json --exec 'node scripts/start-api-v2.js'",
+    "dev:api-legacy": "nodemon --watch src --ext js,json --exec 'node scripts/start-api.js'"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tu-usuario/luxae.git"
+  },
+  "keywords": [
+    "Blockchain",
+    "PoS",
+    "Luxae",
+    "ERC777",
+    "Cryptocurrency"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/tu-usuario/luxae/issues"
+  },
+  "homepage": "https://github.com/tu-usuario/luxae#readme",
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "@nomiclabs/hardhat-ethers": "^2.2.3",
+    "@types/chai": "^5.0.1",
+    "chai": "^4.5.0",
+    "ethers": "^6.13.5",
+    "hardhat": "^2.22.18",
+    "nodemon": "^3.1.0",
+    "concurrently": "^8.2.2"
+  }
+}

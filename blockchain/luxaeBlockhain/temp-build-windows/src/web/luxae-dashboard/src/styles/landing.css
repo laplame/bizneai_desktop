@@ -1,0 +1,15 @@
+.hero-gradient {
+    background: linear-gradient(135deg, #1a365d 0%, #2d3748 100%);
+}
+
+.feature-card {
+    transition: transform 0.2s;
+}
+
+.feature-card:hover {
+    transform: translateY(-5px);
+}
+
+.code-block {
+    font-family: 'Fira Code', monospace;
+} 

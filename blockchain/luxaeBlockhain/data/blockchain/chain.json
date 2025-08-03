@@ -1,0 +1,11 @@
+[
+  {
+    "index": 0,
+    "timestamp": 1738615514863,
+    "transactions": [],
+    "previousHash": "0",
+    "hash": "genesis",
+    "validator": "genesis",
+    "signature": "genesis"
+  }
+]
