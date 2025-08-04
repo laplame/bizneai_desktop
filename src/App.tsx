@@ -311,14 +311,6 @@ function App() {
   return (
     <StoreProvider>
       <div className="pos-container">
-        {/* Navbar */}
-        <Navbar 
-          isMiningActive={isMiningActive}
-          onMiningClick={handleNavbarMiningClick}
-          onSettingsClick={handleNavbarSettingsClick}
-          lastBackupTime={getLastBackupTime()}
-        />
-
         {/* Sidebar */}
         <div className="pos-sidebar">
           <div className="sidebar-section">
@@ -430,8 +422,25 @@ function App() {
                 {/* Cart Section */}
                 <div className="pos-cart">
                   <div className="cart-header">
-                    <ShoppingCart size={20} />
-                    Carrito de Compras
+                    <div className="cart-header-left">
+                      <ShoppingCart size={20} />
+                      <span>Carrito de Compras</span>
+                    </div>
+                    <div className="cart-header-center">
+                      {/* Mining Button */}
+                      <button 
+                        className={`cart-mining-btn ${isMiningActive ? 'active' : ''}`}
+                        onClick={handleNavbarMiningClick}
+                        title={isMiningActive ? 'Minería activa' : 'Iniciar minería'}
+                      >
+                        <Cpu size={16} />
+                        <span>Minería</span>
+                        {isMiningActive && <div className="mining-indicator"></div>}
+                      </button>
+                    </div>
+                    <div className="cart-header-right">
+                      <span>{new Date().toLocaleDateString()}</span>
+                    </div>
                   </div>
                   <div className="cart-items">
                     {cart.length === 0 ? (
@@ -498,7 +507,7 @@ function App() {
                     </button>
                     <button className="action-btn secondary" onClick={showVirtualTicket}>
                       <Receipt size={20} style={{ marginRight: '0.5rem' }} />
-                      Imprimir Ticket
+                      Ver Tickets
                     </button>
                   </div>
                 </div>

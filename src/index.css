@@ -87,8 +87,7 @@ body {
   display: flex;
   flex-direction: column;
   background: #ffffff;
-  height: calc(100vh - 80px); /* Adjust for navbar height */
-  margin-top: 80px; /* Space for navbar */
+  height: 100vh;
   overflow-y: auto;
 }
 
@@ -108,8 +107,7 @@ body {
   overflow-y: auto;
   position: relative;
   z-index: 1;
-  height: calc(100vh - 80px); /* Adjust for navbar height */
-  margin-top: 80px; /* Space for navbar */
+  height: 100vh;
 }
 
 .pos-content {
@@ -151,11 +149,109 @@ body {
   background: #1e293b;
   color: white;
   padding: 1rem;
-  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid #334155;
+}
+
+.cart-header-left {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  border-bottom: 1px solid #334155;
+  font-weight: 600;
+}
+
+.cart-header-center {
+  display: flex;
+  align-items: center;
+}
+
+.cart-header-right {
+  display: flex;
+  align-items: center;
+  font-size: 0.875rem;
+  color: #cbd5e1;
+}
+
+.cart-mining-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+  color: white;
+  border: none;
+  padding: 0.5rem 1rem;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.cart-mining-btn:hover {
+  background: linear-gradient(135deg, #2563eb, #1e40af);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+}
+
+.cart-mining-btn.active {
+  background: linear-gradient(135deg, #059669, #047857);
+  box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
+}
+
+.cart-mining-btn.active:hover {
+  background: linear-gradient(135deg, #047857, #065f46);
+}
+
+.cart-mining-btn svg {
+  transition: transform 0.2s ease;
+}
+
+.cart-mining-btn:hover svg {
+  transform: scale(1.1);
+}
+
+.cart-mining-btn .mining-indicator {
+  position: absolute;
+  top: 0.25rem;
+  right: 0.25rem;
+  width: 0.5rem;
+  height: 0.5rem;
+  background: #10b981;
+  border-radius: 50%;
+  animation: pulse 2s infinite;
+}
+
+@media (max-width: 768px) {
+  .cart-header {
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 0.75rem;
+  }
+  
+  .cart-header-left {
+    order: 1;
+  }
+  
+  .cart-header-center {
+    order: 2;
+  }
+  
+  .cart-header-right {
+    order: 3;
+  }
+  
+  .cart-mining-btn {
+    padding: 0.375rem 0.75rem;
+    font-size: 0.75rem;
+  }
+  
+  .cart-mining-btn span {
+    display: none;
+  }
 }
 
 .cart-items {
@@ -5045,233 +5141,18 @@ body {
   }
 
   .upload-content {
-    padding: 0.75rem;
+    padding: 1rem;
   }
-
+  
   .upload-area {
     padding: 2rem 1rem;
   }
-
+  
   .form-section {
     padding: 1rem;
   }
-
+  
   .similarity-section {
     padding: 1rem;
-  }
-}
-
-/* Navbar Styles */
-.navbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  background: #1e293b;
-  color: white;
-  padding: 0.75rem 1.5rem;
-  border-bottom: 1px solid #334155;
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  z-index: 100;
-  height: 80px;
-  box-sizing: border-box;
-}
-
-.navbar-left {
-  display: flex;
-  align-items: center;
-}
-
-.navbar-brand h1 {
-  font-size: 1.25rem;
-  font-weight: bold;
-  margin: 0;
-  color: #f8fafc;
-}
-
-.navbar-brand small {
-  display: block;
-  font-size: 0.75rem;
-  color: #94a3b8;
-  margin-top: 0.125rem;
-}
-
-.navbar-center {
-  display: flex;
-  align-items: center;
-}
-
-.navbar-status {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-}
-
-.status-indicator {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-size: 0.875rem;
-  color: #cbd5e1;
-}
-
-.status-indicator.mining-active {
-  color: #10b981;
-}
-
-.status-indicator svg {
-  width: 1rem;
-  height: 1rem;
-}
-
-.navbar-right {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-}
-
-.navbar-actions {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-}
-
-.navbar-btn {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem 1rem;
-  border: none;
-  border-radius: 0.5rem;
-  font-size: 0.875rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  background: transparent;
-  color: #cbd5e1;
-  position: relative;
-}
-
-.navbar-btn:hover {
-  background: rgba(255, 255, 255, 0.1);
-  color: #f8fafc;
-}
-
-.navbar-btn.mining-btn {
-  background: rgba(16, 185, 129, 0.1);
-  color: #10b981;
-  border: 1px solid rgba(16, 185, 129, 0.3);
-}
-
-.navbar-btn.mining-btn:hover {
-  background: rgba(16, 185, 129, 0.2);
-  color: #10b981;
-}
-
-.navbar-btn.mining-btn.active {
-  background: rgba(16, 185, 129, 0.2);
-  color: #10b981;
-  border-color: #10b981;
-}
-
-.navbar-btn.settings-btn {
-  background: rgba(59, 130, 246, 0.1);
-  color: #3b82f6;
-  border: 1px solid rgba(59, 130, 246, 0.3);
-}
-
-.navbar-btn.settings-btn:hover {
-  background: rgba(59, 130, 246, 0.2);
-  color: #3b82f6;
-}
-
-.navbar-btn svg {
-  width: 1rem;
-  height: 1rem;
-}
-
-.mining-indicator {
-  position: absolute;
-  top: -2px;
-  right: -2px;
-  width: 8px;
-  height: 8px;
-  background: #10b981;
-  border-radius: 50%;
-  animation: pulse 2s infinite;
-}
-
-@keyframes pulse {
-  0%, 100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.5;
-  }
-}
-
-.navbar-date {
-  font-size: 0.875rem;
-  color: #94a3b8;
-  padding: 0.5rem 1rem;
-  background: rgba(255, 255, 255, 0.05);
-  border-radius: 0.5rem;
-}
-
-/* Responsive adjustments */
-@media (max-width: 768px) {
-  .navbar {
-    padding: 0.5rem 1rem;
-  }
-  
-  .navbar-brand h1 {
-    font-size: 1rem;
-  }
-  
-  .navbar-status {
-    gap: 0.5rem;
-  }
-  
-  .status-indicator {
-    font-size: 0.75rem;
-  }
-  
-  .navbar-actions {
-    gap: 0.5rem;
-  }
-  
-  .navbar-btn {
-    padding: 0.375rem 0.75rem;
-    font-size: 0.75rem;
-  }
-  
-  .navbar-btn span {
-    display: none;
-  }
-  
-  .navbar-date {
-    display: none;
-  }
-}
-
-@media (max-width: 480px) {
-  .navbar {
-    flex-direction: column;
-    gap: 0.5rem;
-    padding: 0.75rem;
-  }
-  
-  .navbar-center {
-    order: 3;
-    width: 100%;
-    justify-content: center;
-  }
-  
-  .navbar-right {
-    order: 2;
-    width: 100%;
-    justify-content: center;
   }
 }
