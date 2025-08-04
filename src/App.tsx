@@ -373,9 +373,13 @@ function App() {
           {/* Content */}
           <div className={`pos-content ${activeSection === 'settings' || activeSection === 'mining' ? 'settings-active' : ''}`}>
             {activeSection === 'settings' ? (
-              <Settings />
+              <div style={{ padding: '1rem' }}>
+                <Settings />
+              </div>
             ) : activeSection === 'mining' ? (
-              <Mining />
+              <div style={{ padding: '1rem' }}>
+                <Mining />
+              </div>
             ) : (
               <>
                 {/* Products Section */}
