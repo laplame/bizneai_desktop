@@ -444,7 +444,7 @@ function App() {
                       <ShoppingCart size={20} />
                       <span>Carrito de Compras</span>
                     </div>
-                    <div className="cart-header-center">
+                    <div className="cart-header-right">
                       {/* Mining Button */}
                       <button 
                         className={`cart-mining-btn ${isMiningActive ? 'active' : ''}`}
@@ -455,9 +455,7 @@ function App() {
                         <span>Minería</span>
                         {isMiningActive && <div className="mining-indicator"></div>}
                       </button>
-                    </div>
-                    <div className="cart-header-right">
-                      <span>{new Date().toLocaleDateString()}</span>
+                      <span className="cart-date">{new Date().toLocaleDateString()}</span>
                     </div>
                   </div>
                   <div className="cart-items">
