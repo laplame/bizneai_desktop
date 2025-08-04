@@ -162,11 +162,6 @@ body {
   font-weight: 600;
 }
 
-.cart-header-center {
-  display: flex;
-  align-items: center;
-}
-
 .cart-header-right {
   display: flex;
   align-items: center;
