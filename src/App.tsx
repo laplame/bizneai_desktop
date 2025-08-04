@@ -26,6 +26,7 @@ import Settings from './components/Settings';
 import Mining from './components/Mining';
 import MiningStatus from './components/MiningStatus';
 import ProductUpload from './components/ProductUpload';
+import Navbar from './components/Navbar';
 import { storeAPI } from './api/store';
 import { StoreProvider } from './contexts/StoreContext';
 
@@ -291,6 +292,16 @@ function App() {
     setIsMiningActive(isMining);
   };
 
+  // Handler para click en botón de minería en navbar
+  const handleNavbarMiningClick = () => {
+    setActiveSection('mining');
+  };
+
+  // Handler para click en botón de configuración en navbar
+  const handleNavbarSettingsClick = () => {
+    setActiveSection('settings');
+  };
+
   const handleProductCreated = (product: { name: string; id?: string; price?: number; description?: string }) => {
     // Refresh products list or add to current list
     toast.success(`Product "${product.name}" created successfully!`);
@@ -300,6 +311,14 @@ function App() {
   return (
     <StoreProvider>
       <div className="pos-container">
+        {/* Navbar */}
+        <Navbar 
+          isMiningActive={isMiningActive}
+          onMiningClick={handleNavbarMiningClick}
+          onSettingsClick={handleNavbarSettingsClick}
+          lastBackupTime={getLastBackupTime()}
+        />
+
         {/* Sidebar */}
         <div className="pos-sidebar">
           <div className="sidebar-section">
@@ -336,52 +355,11 @@ function App() {
               <BarChart3 size={20} />
               Reportes
             </div>
-            <div 
-              className={`sidebar-item ${activeSection === 'mining' ? 'active' : ''}`}
-              onClick={() => handleSectionChange('mining')}
-            >
-              <Cpu size={20} />
-              Minería
-            </div>
-          </div>
-
-          <div className="sidebar-section">
-            <div className="sidebar-title">Sistema</div>
-            <div 
-              className={`sidebar-item ${activeSection === 'settings' ? 'active' : ''}`}
-              onClick={() => handleSectionChange('settings')}
-            >
-              <SettingsIcon size={20} />
-              Configuración
-            </div>
           </div>
         </div>
 
         {/* Main Content */}
         <div className="pos-main">
-          {/* Header */}
-          <div className="pos-header">
-            <div>
-              <h2>Punto de Venta - BizneAI</h2>
-              <small>Venta #{Math.floor(Math.random() * 1000) + 1000}</small>
-              {/* Backup Status Indicator */}
-              <div className="backup-status-indicator">
-                <Database className="h-4 w-4" />
-                <span>Último backup: {getLastBackupTime()}</span>
-              </div>
-              {/* Mining Status Indicator */}
-              {isMiningActive && (
-                <div className="backup-status-indicator" style={{ color: '#10b981', marginTop: '0.25rem' }}>
-                  <Cpu className="h-4 w-4" />
-                  <span>Minería LUXAE activa</span>
-                </div>
-              )}
-            </div>
-            <div>
-              <span>{new Date().toLocaleDateString()}</span>
-            </div>
-          </div>
-
           {/* Content */}
           <div className={`pos-content ${activeSection === 'settings' || activeSection === 'mining' ? 'settings-active' : ''}`}>
             {activeSection === 'settings' ? (
@@ -390,14 +368,6 @@ function App() {
               <Mining />
             ) : (
               <>
-                {/* Mining Status Component */}
-                <div style={{ padding: '1rem', paddingBottom: '0.5rem' }}>
-                  <MiningStatus 
-                    isCompact={true} 
-                    onStatusChange={handleMiningStatusChange}
-                  />
-                </div>
-                
                 {/* Products Section */}
                 <div className="pos-products">
                   {/* Search and Categories */}
