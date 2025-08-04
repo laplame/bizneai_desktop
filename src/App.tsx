@@ -222,6 +222,24 @@ function App() {
   // Procesar venta
   const processSale = () => {
     if (cart.length === 0) return;
+    
+    // Verificar si el minado está habilitado
+    if (!isMiningActive) {
+      toast.error('⚠️ Error: El minado de blockchain no está habilitado. Solo disponible en la aplicación de escritorio Electron.', {
+        duration: 5000,
+        style: {
+          background: '#dc2626',
+          color: 'white',
+          fontWeight: 'bold',
+        },
+        iconTheme: {
+          primary: '#ffffff',
+          secondary: '#dc2626',
+        },
+      });
+      return;
+    }
+    
     setIsCheckoutOpen(true);
   };
 
@@ -497,7 +515,12 @@ function App() {
                     </div>
                   </div>
                   <div className="cart-actions">
-                    <button className="action-btn" onClick={processSale} disabled={cart.length === 0}>
+                    <button 
+                      className="action-btn" 
+                      onClick={processSale} 
+                      disabled={cart.length === 0 || !isMiningActive}
+                      title={!isMiningActive ? "El minado debe estar habilitado para procesar ventas" : ""}
+                    >
                       <CreditCard size={20} style={{ marginRight: '0.5rem' }} />
                       Procesar Venta
                     </button>

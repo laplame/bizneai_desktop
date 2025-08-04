@@ -412,11 +412,14 @@ body {
 }
 
 .action-btn.secondary {
-  background: #64748b;
+  background: #475569;
+  color: white;
+  font-weight: 600;
 }
 
 .action-btn.secondary:hover {
-  background: #475569;
+  background: #334155;
+  color: white;
 }
 
 .action-btn.danger {
@@ -5155,4 +5158,17 @@ body {
   .similarity-section {
     padding: 1rem;
   }
+}
+
+.action-btn:disabled {
+  background: #9ca3af;
+  color: #6b7280;
+  cursor: not-allowed;
+  transform: none;
+  opacity: 0.6;
+}
+
+.action-btn:disabled:hover {
+  background: #9ca3af;
+  transform: none;
 }
