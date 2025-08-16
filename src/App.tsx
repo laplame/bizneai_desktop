@@ -377,8 +377,15 @@ function App() {
                 </div>
               )}
             </div>
-            <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
               <span>{new Date().toLocaleDateString()}</span>
+              {/* Mining Status Component in Header */}
+              <div style={{ marginLeft: '1rem' }}>
+                <MiningStatus 
+                  isCompact={true} 
+                  onStatusChange={handleMiningStatusChange}
+                />
+              </div>
             </div>
           </div>
 
@@ -390,14 +397,6 @@ function App() {
               <Mining />
             ) : (
               <>
-                {/* Mining Status Component */}
-                <div style={{ padding: '1rem', paddingBottom: '0.5rem' }}>
-                  <MiningStatus 
-                    isCompact={true} 
-                    onStatusChange={handleMiningStatusChange}
-                  />
-                </div>
-                
                 {/* Products Section */}
                 <div className="pos-products">
                   {/* Search and Categories */}
