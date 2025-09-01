@@ -93,7 +93,8 @@ function App() {
   // Estado para la configuración inicial
   const [isSetupComplete, setIsSetupComplete] = useState<boolean>(() => {
     const stored = localStorage.getItem('bizneai-setup-complete');
-    return stored === 'true';
+    const storeConfig = localStorage.getItem('bizneai-store-config');
+    return stored === 'true' || storeConfig !== null;
   });
 
   // Estado para el modal de carga de productos
@@ -110,6 +111,12 @@ function App() {
         }
       } catch {
         console.log('No se pudo verificar el estado de configuración, usando configuración local');
+        // Verificar si ya hay configuración local
+        const localConfig = localStorage.getItem('bizneai-store-config');
+        if (localConfig) {
+          setIsSetupComplete(true);
+          localStorage.setItem('bizneai-setup-complete', 'true');
+        }
       }
     };
 

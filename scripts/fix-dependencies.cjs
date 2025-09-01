@@ -22,8 +22,6 @@ const problematicDeps = [
   'get-proto',
   'better-sqlite3',
   'sqlite3',
-  'classic-level',
-  'level',
   'express',
   'qs',
   'cloudinary',
@@ -78,16 +76,28 @@ if (missingDeps.length > 0) {
   }
 }
 
-// Rebuild native modules for electron
+// Rebuild native modules for electron (skip problematic ones)
 console.log('🔨 Rebuilding native modules for electron...');
 try {
-  execSync('npx electron-rebuild', { 
+  // Only rebuild better-sqlite3 which is critical
+  execSync('npx electron-rebuild --only better-sqlite3', { 
     stdio: 'inherit', 
     cwd: path.join(__dirname, '..') 
   });
+  console.log('✅ better-sqlite3 rebuilt successfully');
 } catch (error) {
   console.error('❌ electron-rebuild failed:', error.message);
   console.log('⚠️  This might be normal if no native modules need rebuilding');
+  // Try alternative approach
+  try {
+    console.log('🔄 Trying alternative rebuild approach...');
+    execSync('npm rebuild better-sqlite3 --update-binary', { 
+      stdio: 'inherit', 
+      cwd: path.join(__dirname, '..') 
+    });
+  } catch (altError) {
+    console.log('⚠️  Alternative rebuild also failed, continuing anyway...');
+  }
 }
 
 // Verify critical dependencies

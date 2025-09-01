@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { 
+ import { 
   Settings as SettingsIcon, 
   Database, 
   Shield, 
@@ -39,7 +39,6 @@ import {
   TrendingDown,
   DollarSign,
   Bitcoin,
-  Ethereum,
   Wallet,
   Receipt,
   FileText,
@@ -81,7 +80,6 @@ import {
   TrendingDown as TrendingDownIcon,
   DollarSign as DollarSignIcon,
   Bitcoin as BitcoinIcon,
-  Ethereum as EthereumIcon,
   Wallet as WalletIcon,
   Receipt as ReceiptIcon,
   FileText as FileTextIcon,
@@ -99,7 +97,6 @@ import {
   Package as PackageIcon,
   Tag as TagIcon,
   Percent as PercentIcon,
-  Hash as HashIcon,
   HashIcon as HashIconIcon,
   QrCode as QrCodeIcon,
   Barcode as BarcodeIcon,
@@ -111,7 +108,12 @@ import {
 } from 'lucide-react';
 
 // Temporary simplified Settings component
-const Settings: React.FC = () => {
+interface SettingsProps {
+  isSetupMode?: boolean;
+  onSetupComplete?: () => void;
+}
+
+const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => {
   const [activeTab, setActiveTab] = useState('general');
   const [isLoading, setIsLoading] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -149,6 +151,10 @@ const Settings: React.FC = () => {
       localStorage.setItem('bizneai-store-identifiers', JSON.stringify(storeIdentifiers));
       
       setMessage({ type: 'success', text: 'Configuración guardada exitosamente' });
+      // Call onSetupComplete if in setup mode
+      if (isSetupMode && onSetupComplete) {
+        onSetupComplete();
+      }
     } catch (error) {
       setMessage({ type: 'error', text: 'Error al guardar la configuración' });
     } finally {
