@@ -145,6 +145,102 @@ router.post('/backups', validateStoreIdentifiers, (req, res) => {
   }
 });
 
+// Rutas de transacciones (Merkle Tree)
+router.get('/transactions', (req, res) => {
+  try {
+    const db = getDatabase();
+    const limit = parseInt(req.query.limit as string) || 1000;
+    const transactions = db.getTransactions(limit);
+    res.json(transactions);
+  } catch (error) {
+    res.status(500).json({ error: 'Error al obtener transacciones' });
+  }
+});
+
+router.get('/transactions/date/:date', (req, res) => {
+  try {
+    const db = getDatabase();
+    const transactions = db.getTransactionsByDate(req.params.date);
+    res.json(transactions);
+  } catch (error) {
+    res.status(500).json({ error: 'Error al obtener transacciones por fecha' });
+  }
+});
+
+router.get('/transactions/:id', (req, res) => {
+  try {
+    const db = getDatabase();
+    const transaction = db.getTransactionById(req.params.id);
+    if (transaction) {
+      res.json(transaction);
+    } else {
+      res.status(404).json({ error: 'Transacción no encontrada' });
+    }
+  } catch (error) {
+    res.status(500).json({ error: 'Error al obtener transacción' });
+  }
+});
+
+router.post('/transactions', (req, res) => {
+  try {
+    const db = getDatabase();
+    db.addTransaction(req.body);
+    res.json({ message: 'Transacción agregada exitosamente' });
+  } catch (error) {
+    res.status(500).json({ error: 'Error al agregar transacción' });
+  }
+});
+
+// Rutas de bloques diarios (Merkle Tree)
+router.get('/blocks', (req, res) => {
+  try {
+    const db = getDatabase();
+    const limit = parseInt(req.query.limit as string) || 100;
+    const blocks = db.getBlocks(limit);
+    res.json(blocks);
+  } catch (error) {
+    res.status(500).json({ error: 'Error al obtener bloques' });
+  }
+});
+
+router.get('/blocks/last', (req, res) => {
+  try {
+    const db = getDatabase();
+    const block = db.getLastBlock();
+    if (block) {
+      res.json(block);
+    } else {
+      res.status(404).json({ error: 'No hay bloques disponibles' });
+    }
+  } catch (error) {
+    res.status(500).json({ error: 'Error al obtener último bloque' });
+  }
+});
+
+router.get('/blocks/:id', (req, res) => {
+  try {
+    const db = getDatabase();
+    const block = db.getBlockById(req.params.id);
+    if (block) {
+      res.json(block);
+    } else {
+      res.status(404).json({ error: 'Bloque no encontrado' });
+    }
+  } catch (error) {
+    res.status(500).json({ error: 'Error al obtener bloque' });
+  }
+});
+
+router.post('/blocks', (req, res) => {
+  try {
+    const db = getDatabase();
+    db.addBlock(req.body);
+    res.json({ message: 'Bloque agregado exitosamente' });
+  } catch (error) {
+    res.status(500).json({ error: 'Error al agregar bloque' });
+  }
+});
+
 // Rutas de estadísticas
 router.get('/stats', validateStoreIdentifiers, (req, res) => {
   try {

@@ -3,8 +3,10 @@ import React, { createContext, useContext, useState, useEffect, ReactNode } from
 interface StoreIdentifiers {
   _id: string | null;
   clientId: string | null;
+  shopId: string | null; // Shop ID from server URL (MCP)
   storeName: string | null;
   storeType: string | null;
+  mcpUrl: string | null; // MCP API URL
 }
 
 interface StoreContextType {
@@ -24,8 +26,10 @@ export const StoreProvider: React.FC<StoreProviderProps> = ({ children }) => {
   const [storeIdentifiers, setStoreIdentifiersState] = useState<StoreIdentifiers>({
     _id: null,
     clientId: null,
+    shopId: null,
     storeName: null,
-    storeType: null
+    storeType: null,
+    mcpUrl: null
   });
 
   // Cargar identificadores guardados al inicializar
@@ -61,8 +65,10 @@ export const StoreProvider: React.FC<StoreProviderProps> = ({ children }) => {
     setStoreIdentifiersState({
       _id: null,
       clientId: null,
+      shopId: null,
       storeName: null,
-      storeType: null
+      storeType: null,
+      mcpUrl: null
     });
     localStorage.removeItem('bizneai-store-identifiers');
   };

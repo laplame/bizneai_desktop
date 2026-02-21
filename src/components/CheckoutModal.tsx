@@ -6,7 +6,9 @@ import {
   QrCode, 
   CheckCircle,
   X,
-  Receipt
+  Receipt,
+  Link as LinkIcon,
+  Percent
 } from 'lucide-react';
 
 interface CheckoutModalProps {
@@ -16,7 +18,7 @@ interface CheckoutModalProps {
   onComplete: (paymentMethod: string, amount: number, change?: number) => void;
 }
 
-type PaymentMethod = 'cash' | 'card' | 'crypto' | 'codi';
+type PaymentMethod = 'cash' | 'card' | 'crypto' | 'codi' | 'mixed';
 
 interface PaymentMethodOption {
   id: PaymentMethod;
@@ -54,6 +56,13 @@ const paymentMethods: PaymentMethodOption[] = [
     icon: <QrCode size={24} />,
     description: 'Transferencia SPEI',
     color: '#8b5cf6'
+  },
+  {
+    id: 'mixed',
+    name: 'Paga con Link4deal',
+    icon: <LinkIcon size={24} />,
+    description: 'Pago mixto (Efectivo, Tarjeta, CODI, Cupón Crypto)',
+    color: '#ec4899'
   }
 ];
 
@@ -67,6 +76,17 @@ const CheckoutModal = ({ isOpen, onClose, total, onComplete }: CheckoutModalProp
   const [codiQr, setCodiQr] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [step, setStep] = useState<'method' | 'payment' | 'success'>('method');
+  
+  // Estados para pago mixto
+  const [mixedCashPercent, setMixedCashPercent] = useState<number>(0);
+  const [mixedCardPercent, setMixedCardPercent] = useState<number>(0);
+  const [mixedCodiPercent, setMixedCodiPercent] = useState<number>(0);
+  const [mixedCryptoPercent, setMixedCryptoPercent] = useState<number>(0);
+  const [mixedCashAmount, setMixedCashAmount] = useState('');
+  const [mixedCardNumber, setMixedCardNumber] = useState('');
+  const [mixedCardExpiry, setMixedCardExpiry] = useState('');
+  const [mixedCardCvv, setMixedCardCvv] = useState('');
+  const [mixedCryptoCoupon, setMixedCryptoCoupon] = useState('');
 
   const subtotal = total;
   const tax = total * 0.16;
@@ -84,6 +104,16 @@ const CheckoutModal = ({ isOpen, onClose, total, onComplete }: CheckoutModalProp
       setCryptoAddress('');
       setCodiQr('');
       setIsProcessing(false);
+      // Reset mixed payment
+      setMixedCashPercent(0);
+      setMixedCardPercent(0);
+      setMixedCodiPercent(0);
+      setMixedCryptoPercent(0);
+      setMixedCashAmount('');
+      setMixedCardNumber('');
+      setMixedCardExpiry('');
+      setMixedCardCvv('');
+      setMixedCryptoCoupon('');
     }
   }, [isOpen]);
 
@@ -103,10 +133,24 @@ const CheckoutModal = ({ isOpen, onClose, total, onComplete }: CheckoutModalProp
     
     // Simular cierre automático después de mostrar éxito
     setTimeout(() => {
-      onComplete(selectedMethod!, finalTotal, change);
+      if (selectedMethod === 'mixed') {
+        // Para pago mixto, pasar el total y los detalles
+        onComplete('mixed', finalTotal, 0);
+      } else {
+        onComplete(selectedMethod!, finalTotal, change);
+      }
       onClose();
     }, 2000);
   };
+
+  // Calcular totales para pago mixto
+  const mixedTotal = finalTotal;
+  const mixedCashTotal = (mixedTotal * mixedCashPercent) / 100;
+  const mixedCardTotal = (mixedTotal * mixedCardPercent) / 100;
+  const mixedCodiTotal = (mixedTotal * mixedCodiPercent) / 100;
+  const mixedCryptoTotal = (mixedTotal * mixedCryptoPercent) / 100;
+  const mixedTotalPercent = mixedCashPercent + mixedCardPercent + mixedCodiPercent + mixedCryptoPercent;
+  const mixedChange = parseFloat(mixedCashAmount) - mixedCashTotal;
 
   const renderPaymentForm = () => {
     switch (selectedMethod) {
@@ -273,6 +317,223 @@ const CheckoutModal = ({ isOpen, onClose, total, onComplete }: CheckoutModalProp
               disabled={isProcessing}
             >
               {isProcessing ? 'Verificando...' : 'Verificar Pago'}
+            </button>
+          </div>
+        );
+
+      case 'mixed':
+        return (
+          <div className="payment-form">
+            <div className="link4deal-header">
+              <LinkIcon size={28} style={{ color: '#ec4899' }} />
+              <h3>Paga con Link4deal</h3>
+            </div>
+            <div className="amount-display">
+              <div className="amount-row">
+                <span>Total a pagar:</span>
+                <span className="total-amount">${mixedTotal.toFixed(2)}</span>
+              </div>
+            </div>
+
+            <div className="mixed-payment-section">
+              <h4>Distribución del Pago (%)</h4>
+              <div className="percent-summary" style={{ 
+                marginBottom: '1rem',
+                padding: '0.75rem',
+                background: mixedTotalPercent === 100 ? '#d1fae5' : '#fee2e2',
+                borderRadius: '8px',
+                textAlign: 'center',
+                fontWeight: 600,
+                color: mixedTotalPercent === 100 ? '#059669' : '#dc2626'
+              }}>
+                Total: {mixedTotalPercent}% {mixedTotalPercent === 100 ? '✓' : '(Debe sumar 100%)'}
+              </div>
+
+              <div className="percent-inputs">
+                <div className="input-group">
+                  <label>
+                    <DollarSign size={16} />
+                    Efectivo (%)
+                  </label>
+                  <input
+                    type="number"
+                    value={mixedCashPercent}
+                    onChange={(e) => {
+                      const val = Math.max(0, Math.min(100, parseFloat(e.target.value) || 0));
+                      setMixedCashPercent(val);
+                    }}
+                    min="0"
+                    max="100"
+                    step="1"
+                  />
+                  <span className="amount-preview">${mixedCashTotal.toFixed(2)}</span>
+                </div>
+
+                <div className="input-group">
+                  <label>
+                    <CreditCard size={16} />
+                    Tarjeta (%)
+                  </label>
+                  <input
+                    type="number"
+                    value={mixedCardPercent}
+                    onChange={(e) => {
+                      const val = Math.max(0, Math.min(100, parseFloat(e.target.value) || 0));
+                      setMixedCardPercent(val);
+                    }}
+                    min="0"
+                    max="100"
+                    step="1"
+                  />
+                  <span className="amount-preview">${mixedCardTotal.toFixed(2)}</span>
+                </div>
+
+                <div className="input-group">
+                  <label>
+                    <QrCode size={16} />
+                    CODI (%)
+                  </label>
+                  <input
+                    type="number"
+                    value={mixedCodiPercent}
+                    onChange={(e) => {
+                      const val = Math.max(0, Math.min(100, parseFloat(e.target.value) || 0));
+                      setMixedCodiPercent(val);
+                    }}
+                    min="0"
+                    max="100"
+                    step="1"
+                  />
+                  <span className="amount-preview">${mixedCodiTotal.toFixed(2)}</span>
+                </div>
+
+                <div className="input-group">
+                  <label>
+                    <Bitcoin size={16} />
+                    Cupón Crypto (%)
+                  </label>
+                  <input
+                    type="number"
+                    value={mixedCryptoPercent}
+                    onChange={(e) => {
+                      const val = Math.max(0, Math.min(100, parseFloat(e.target.value) || 0));
+                      setMixedCryptoPercent(val);
+                    }}
+                    min="0"
+                    max="100"
+                    step="1"
+                  />
+                  <span className="amount-preview">${mixedCryptoTotal.toFixed(2)}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Campos de pago según porcentajes */}
+            {mixedCashPercent > 0 && (
+              <div className="mixed-payment-detail">
+                <h4>Pago en Efectivo: ${mixedCashTotal.toFixed(2)}</h4>
+                <div className="input-group">
+                  <label>Monto recibido:</label>
+                  <input
+                    type="number"
+                    value={mixedCashAmount}
+                    onChange={(e) => setMixedCashAmount(e.target.value)}
+                    placeholder="0.00"
+                    step="0.01"
+                    min={mixedCashTotal}
+                  />
+                </div>
+                {parseFloat(mixedCashAmount) >= mixedCashTotal && (
+                  <div className="change-display">
+                    <span>Cambio:</span>
+                    <span className="change-amount">${mixedChange.toFixed(2)}</span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {mixedCardPercent > 0 && (
+              <div className="mixed-payment-detail">
+                <h4>Pago con Tarjeta: ${mixedCardTotal.toFixed(2)}</h4>
+                <div className="input-group">
+                  <label>Número de tarjeta:</label>
+                  <input
+                    type="text"
+                    value={mixedCardNumber}
+                    onChange={(e) => setMixedCardNumber(e.target.value)}
+                    placeholder="1234 5678 9012 3456"
+                    maxLength={19}
+                  />
+                </div>
+                <div className="card-row">
+                  <div className="input-group">
+                    <label>Vencimiento:</label>
+                    <input
+                      type="text"
+                      value={mixedCardExpiry}
+                      onChange={(e) => setMixedCardExpiry(e.target.value)}
+                      placeholder="MM/AA"
+                      maxLength={5}
+                    />
+                  </div>
+                  <div className="input-group">
+                    <label>CVV:</label>
+                    <input
+                      type="text"
+                      value={mixedCardCvv}
+                      onChange={(e) => setMixedCardCvv(e.target.value)}
+                      placeholder="123"
+                      maxLength={4}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {mixedCodiPercent > 0 && (
+              <div className="mixed-payment-detail">
+                <h4>Pago con CODI: ${mixedCodiTotal.toFixed(2)}</h4>
+                <div className="codi-info">
+                  <p>Escanea el código QR con tu app bancaria</p>
+                  <div className="qr-code-placeholder">
+                    <QrCode size={100} />
+                    <p>CODI QR</p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {mixedCryptoPercent > 0 && (
+              <div className="mixed-payment-detail">
+                <h4>Cupón Crypto: ${mixedCryptoTotal.toFixed(2)}</h4>
+                <div className="input-group">
+                  <label>Código del cupón:</label>
+                  <input
+                    type="text"
+                    value={mixedCryptoCoupon}
+                    onChange={(e) => setMixedCryptoCoupon(e.target.value)}
+                    placeholder="Ingresa el código del cupón"
+                  />
+                </div>
+              </div>
+            )}
+
+            <button
+              className="payment-btn"
+              onClick={handlePayment}
+              disabled={
+                mixedTotalPercent !== 100 ||
+                (mixedCashPercent > 0 && parseFloat(mixedCashAmount) < mixedCashTotal) ||
+                (mixedCardPercent > 0 && (!mixedCardNumber || !mixedCardExpiry || !mixedCardCvv)) ||
+                (mixedCryptoPercent > 0 && !mixedCryptoCoupon) ||
+                isProcessing
+              }
+              style={{ 
+                background: mixedTotalPercent === 100 ? '#ec4899' : '#9ca3af',
+                marginTop: '1.5rem'
+              }}
+            >
+              {isProcessing ? 'Procesando...' : 'Confirmar Pago Mixto'}
             </button>
           </div>
         );

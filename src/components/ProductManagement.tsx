@@ -20,8 +20,21 @@ import {
   ImageIcon,
   Upload,
   Download,
-  RefreshCw
+  RefreshCw,
+  Warehouse,
+  TrendingUp,
+  TrendingDown,
+  Settings,
+  History,
+  AlertCircle,
+  CheckSquare,
+  Square,
+  Cloud,
+  CloudDownload
 } from 'lucide-react';
+import { toast } from 'react-hot-toast';
+import { getProductsFromMcp, mapMcpProductToLocal, isShopIdConfigured } from '../utils/shopIdHelper';
+import InventoryManagement from './InventoryManagement';
 
 interface Product {
   id: number;
@@ -168,17 +181,66 @@ const ProductManagement = ({ isOpen, onClose }: ProductManagementProps) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [stockFilter, setStockFilter] = useState('all');
-  const [view, setView] = useState<'list' | 'grid' | 'analytics'>('list');
+  const [view, setView] = useState<'list' | 'grid' | 'analytics' | 'inventory'>('list');
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [editingProduct, setEditingProduct] = useState<Partial<Product>>({});
 
-  useEffect(() => {
-    if (isOpen) {
+  // Load products from server
+  const loadProductsFromServer = async () => {
+    if (!isShopIdConfigured()) {
+      toast.error('Primero configura la URL del servidor en Configuración');
+      return;
+    }
+
+    try {
+      toast.loading('Cargando productos desde el servidor...', { id: 'loading-products' });
+      const mcpProducts = await getProductsFromMcp();
+      
+      if (mcpProducts && mcpProducts.length > 0) {
+        const mappedProducts = mcpProducts.map((p: any, index: number) => mapMcpProductToLocal(p, index));
+        setProducts(mappedProducts);
+        setFilteredProducts(mappedProducts);
+        // Guardar en localStorage para sincronizar con POS
+        localStorage.setItem('bizneai-products', JSON.stringify(mappedProducts));
+        // Disparar evento personalizado para actualizar App.tsx
+        window.dispatchEvent(new Event('products-updated'));
+        toast.success(`${mappedProducts.length} productos cargados desde el servidor`, { id: 'loading-products' });
+      } else {
+        // Si no hay productos en el servidor, usar productos de muestra
+        const sampleProducts = generateSampleProducts();
+        setProducts(sampleProducts);
+        setFilteredProducts(sampleProducts);
+        // Guardar en localStorage
+        localStorage.setItem('bizneai-products', JSON.stringify(sampleProducts));
+        window.dispatchEvent(new Event('products-updated'));
+        toast.success('No hay productos en el servidor. Mostrando productos de muestra', { id: 'loading-products' });
+      }
+    } catch (error) {
+      console.error('Error loading products from server:', error);
+      toast.error('Error al cargar productos desde el servidor', { id: 'loading-products' });
+      // Fallback a productos de muestra
       const sampleProducts = generateSampleProducts();
       setProducts(sampleProducts);
       setFilteredProducts(sampleProducts);
+      // Guardar en localStorage
+      localStorage.setItem('bizneai-products', JSON.stringify(sampleProducts));
+      window.dispatchEvent(new Event('products-updated'));
+    }
+  };
+
+  useEffect(() => {
+    if (isOpen) {
+      // Intentar cargar desde el servidor primero
+      if (isShopIdConfigured()) {
+        loadProductsFromServer();
+      } else {
+        // Si no hay shopId configurado, usar productos de muestra
+      const sampleProducts = generateSampleProducts();
+      setProducts(sampleProducts);
+      setFilteredProducts(sampleProducts);
+      }
     }
   }, [isOpen]);
 
@@ -732,7 +794,20 @@ const ProductManagement = ({ isOpen, onClose }: ProductManagementProps) => {
         <div className="management-header">
           <h2>Gestión de Productos</h2>
           <div className="header-actions">
-            <button className="action-btn" title="Actualizar">
+            {isShopIdConfigured() && (
+              <button 
+                className="action-btn" 
+                title="Cargar desde Servidor"
+                onClick={loadProductsFromServer}
+              >
+                <CloudDownload size={20} />
+              </button>
+            )}
+            <button className="action-btn" title="Actualizar" onClick={() => {
+              const sampleProducts = generateSampleProducts();
+              setProducts(sampleProducts);
+              setFilteredProducts(sampleProducts);
+            }}>
               <RefreshCw size={20} />
             </button>
             <button className="action-btn" title="Exportar">
@@ -796,6 +871,13 @@ const ProductManagement = ({ isOpen, onClose }: ProductManagementProps) => {
               Cuadrícula
             </button>
             <button 
+              className={`view-tab ${view === 'inventory' ? 'active' : ''}`}
+              onClick={() => setView('inventory')}
+            >
+              <Warehouse size={20} />
+              Inventario
+            </button>
+            <button 
               className={`view-tab ${view === 'analytics' ? 'active' : ''}`}
               onClick={() => setView('analytics')}
             >
@@ -808,6 +890,7 @@ const ProductManagement = ({ isOpen, onClose }: ProductManagementProps) => {
           <div className="view-content">
             {view === 'list' && renderProductList()}
             {view === 'grid' && renderProductGrid()}
+            {view === 'inventory' && <InventoryManagement products={products} onStockUpdate={handleStockUpdate} />}
             {view === 'analytics' && renderAnalytics()}
           </div>
         </div>

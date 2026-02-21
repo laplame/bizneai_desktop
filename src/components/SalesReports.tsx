@@ -12,8 +12,31 @@ import {
   FileText,
   PieChart,
   Activity,
-  X
+  X,
+  History,
+  Shield,
+  CheckCircle,
+  AlertCircle,
+  Copy,
+  Link as LinkIcon,
+  Layers,
+  CloudDownload
 } from 'lucide-react';
+import { toast } from 'react-hot-toast';
+import {
+  Transaction,
+  DailyBlock,
+  MerkleProof,
+  generateTransactionHash,
+  createDailyBlock,
+  buildMerkleTree,
+  generateMerkleProof,
+  verifyMerkleProof,
+  verifyBlockIntegrity,
+  verifyChainIntegrity
+} from '../utils/merkleTree';
+import { useDatabase } from '../hooks/useDatabase';
+import { getTransactionsFromMcp, mapMcpTransactionToSale, isShopIdConfigured } from '../utils/shopIdHelper';
 
 interface Sale {
   id: number;
@@ -37,7 +60,7 @@ interface SalesReportsProps {
   onClose: () => void;
 }
 
-// Datos de ejemplo para reportes
+// Datos de ejemplo para ventas
 const generateSampleSales = (): Sale[] => {
   const sales: Sale[] = [];
   const products = [
@@ -87,20 +110,294 @@ const generateSampleSales = (): Sale[] => {
 };
 
 const SalesReports = ({ isOpen, onClose }: SalesReportsProps) => {
+  const { 
+    getTransactions, 
+    getTransactionsByDate, 
+    addTransaction,
+    getBlocks, 
+    getBlockById,
+    getLastBlock,
+    addBlock 
+  } = useDatabase();
+  
   const [sales, setSales] = useState<Sale[]>([]);
   const [filteredSales, setFilteredSales] = useState<Sale[]>([]);
   const [dateRange, setDateRange] = useState('7d');
   const [paymentMethod, setPaymentMethod] = useState('all');
   const [category, setCategory] = useState('all');
-  const [view, setView] = useState<'summary' | 'detailed' | 'analytics'>('summary');
+  const [view, setView] = useState<'summary' | 'detailed' | 'analytics' | 'history' | 'stats'>('summary');
+  const [isStatsLoading, setIsStatsLoading] = useState(false);
+  const [statsCache, setStatsCache] = useState<any>(null);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [blocks, setBlocks] = useState<DailyBlock[]>([]);
+  const [selectedBlock, setSelectedBlock] = useState<DailyBlock | null>(null);
+  const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
+  const [merkleProof, setMerkleProof] = useState<MerkleProof | null>(null);
+  const [isGeneratingBlock, setIsGeneratingBlock] = useState(false);
+  const [isVerifying, setIsVerifying] = useState(false);
+  const [verificationResult, setVerificationResult] = useState<{ valid: boolean; errors: string[] } | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
 
-  useEffect(() => {
-    if (isOpen) {
+  // Load sales from server
+  const loadSalesFromServer = async () => {
+    if (!isShopIdConfigured()) {
+      toast.error('Primero configura la URL del servidor en Configuración');
+      return;
+    }
+
+    try {
+      setIsLoading(true);
+      toast.loading('Cargando ventas desde el servidor...', { id: 'loading-sales' });
+      const mcpTransactions = await getTransactionsFromMcp();
+      
+      if (mcpTransactions && mcpTransactions.length > 0) {
+        const mappedSales = mcpTransactions.map((t: any, index: number) => mapMcpTransactionToSale(t, index));
+        setSales(mappedSales);
+        setFilteredSales(mappedSales);
+        toast.success(`${mappedSales.length} ventas cargadas desde el servidor`, { id: 'loading-sales' });
+      } else {
+        // Si no hay transacciones en el servidor, usar ventas de muestra
+        const sampleSales = generateSampleSales();
+        setSales(sampleSales);
+        setFilteredSales(sampleSales);
+        toast.success('No hay ventas en el servidor. Mostrando ventas de muestra', { id: 'loading-sales' });
+      }
+    } catch (error) {
+      console.error('Error loading sales from server:', error);
+      toast.error('Error al cargar ventas desde el servidor', { id: 'loading-sales' });
+      // Fallback a ventas de muestra
       const sampleSales = generateSampleSales();
       setSales(sampleSales);
       setFilteredSales(sampleSales);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isOpen) {
+      // Intentar cargar desde el servidor primero
+      if (isShopIdConfigured()) {
+        loadSalesFromServer();
+      } else {
+        // Si no hay shopId configurado, usar ventas de muestra
+      const sampleSales = generateSampleSales();
+      setSales(sampleSales);
+      setFilteredSales(sampleSales);
+      }
+      loadTransactionsAndBlocks();
     }
   }, [isOpen]);
+
+  const loadTransactionsAndBlocks = async () => {
+    setIsLoading(true);
+    try {
+      // La aplicación usa base de datos local, no API
+      // Intentar cargar desde la base de datos local
+      try {
+      const dbTransactions = await getTransactions(1000);
+      const dbBlocks = await getBlocks(100);
+      
+        setTransactions(dbTransactions || []);
+        setBlocks(dbBlocks || []);
+      
+      // If no transactions exist, generate from sample sales
+        if ((dbTransactions || []).length === 0) {
+        await generateTransactionsFromSales();
+        }
+      } catch (dbError) {
+        // Si hay error con la base de datos, usar arrays vacíos
+        console.warn('Database not available, using empty arrays:', dbError);
+        setTransactions([]);
+        setBlocks([]);
+      }
+    } catch (error) {
+      console.error('Error loading transactions and blocks:', error);
+      // No mostrar error al usuario, solo usar arrays vacíos
+      setTransactions([]);
+      setBlocks([]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const generateTransactionsFromSales = async () => {
+    const sampleSales = generateSampleSales();
+    const newTransactions: Transaction[] = [];
+    
+    for (const sale of sampleSales) {
+      const transaction: Omit<Transaction, 'hash'> = {
+        id: `tx_${sale.id}_${Date.now()}`,
+        saleId: sale.id,
+        action: 'create',
+        timestamp: sale.date,
+        data: sale
+      };
+      
+      const hash = await generateTransactionHash(transaction);
+      const fullTransaction = { ...transaction, hash };
+      newTransactions.push(fullTransaction);
+      
+      // Save to database
+      try {
+        await addTransaction(fullTransaction);
+      } catch (error) {
+        console.error('Error saving transaction:', error);
+      }
+    }
+    
+    setTransactions(newTransactions);
+  };
+
+  const handleGenerateDailyBlock = async (date: string) => {
+    setIsGeneratingBlock(true);
+    try {
+      const dayTransactions = transactions.filter(tx => {
+        const txDate = new Date(tx.timestamp).toISOString().split('T')[0];
+        return txDate === date;
+      });
+
+      if (dayTransactions.length === 0) {
+        toast.error('No hay transacciones para esta fecha');
+        setIsGeneratingBlock(false);
+        return;
+      }
+
+      const lastBlock = blocks.length > 0 ? blocks[blocks.length - 1] : null;
+      const previousBlockHash = lastBlock ? lastBlock.blockHash : null;
+
+      const newBlock = await createDailyBlock(date, dayTransactions, previousBlockHash);
+      
+      // Save to database
+      await addBlock(newBlock);
+      
+      // Reload blocks from database
+      const updatedBlocks = await getBlocks(100);
+      setBlocks(updatedBlocks);
+      
+      toast.success(`Bloque generado para ${date} con ${dayTransactions.length} transacciones`);
+    } catch (error) {
+      console.error('Error generating block:', error);
+      toast.error('Error al generar el bloque');
+    } finally {
+      setIsGeneratingBlock(false);
+    }
+  };
+
+  const handleVerifyTransaction = async (transaction: Transaction) => {
+    setIsVerifying(true);
+    try {
+      // Find block containing this transaction
+      let block = blocks.find(b => 
+        b.transactions.some(tx => tx.id === transaction.id)
+      );
+      
+      // If not in memory, load from database
+      if (!block) {
+        const allBlocks = await getBlocks(100);
+        block = allBlocks.find(b => 
+          b.transactions.some(tx => tx.id === transaction.id)
+        );
+      }
+      
+      if (!block) {
+        toast.error('Transacción no encontrada en ningún bloque');
+        setIsVerifying(false);
+        return;
+      }
+      
+      // Load full block data if needed
+      if (!block.transactions || block.transactions.length === 0) {
+        const fullBlock = await getBlockById(block.id);
+        if (fullBlock) {
+          block = fullBlock;
+        }
+      }
+
+      const { tree } = await buildMerkleTree(block.transactions);
+      const proof = generateMerkleProof(transaction.hash, block.transactions, tree);
+      const isValid = await verifyMerkleProof(proof);
+      
+      setMerkleProof(proof);
+      setVerificationResult({ valid: isValid, errors: isValid ? [] : ['La prueba de Merkle no es válida'] });
+      
+      if (isValid) {
+        toast.success('Transacción verificada correctamente');
+      } else {
+        toast.error('La transacción no pudo ser verificada');
+      }
+    } catch (error) {
+      console.error('Error verifying transaction:', error);
+      toast.error('Error al verificar la transacción');
+      setVerificationResult({ valid: false, errors: ['Error al verificar'] });
+    } finally {
+      setIsVerifying(false);
+    }
+  };
+
+  const handleVerifyBlock = async (block: DailyBlock) => {
+    setIsVerifying(true);
+    try {
+      const result = await verifyBlockIntegrity(block);
+      setVerificationResult(result);
+      
+      if (result.valid) {
+        toast.success('Bloque verificado correctamente');
+      } else {
+        toast.error(`Errores encontrados: ${result.errors.join(', ')}`);
+      }
+    } catch (error) {
+      console.error('Error verifying block:', error);
+      toast.error('Error al verificar el bloque');
+      setVerificationResult({ valid: false, errors: ['Error al verificar'] });
+    } finally {
+      setIsVerifying(false);
+    }
+  };
+
+  const handleVerifyChain = async () => {
+    setIsVerifying(true);
+    try {
+      if (blocks.length === 0) {
+        toast.error('No hay bloques para verificar');
+        setIsVerifying(false);
+        return;
+      }
+
+      const result = await verifyChainIntegrity(blocks);
+      setVerificationResult(result);
+      
+      if (result.valid) {
+        toast.success('Cadena verificada correctamente');
+      } else {
+        toast.error(`Errores encontrados: ${result.errors.join(', ')}`);
+      }
+    } catch (error) {
+      console.error('Error verifying chain:', error);
+      toast.error('Error al verificar la cadena');
+      setVerificationResult({ valid: false, errors: ['Error al verificar'] });
+    } finally {
+      setIsVerifying(false);
+    }
+  };
+
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text);
+    toast.success('Copiado al portapapeles');
+  };
+
+  const getTodayDate = () => {
+    return new Date().toISOString().split('T')[0];
+  };
+
+  const getUniqueDates = () => {
+    const dates = new Set<string>();
+    transactions.forEach(tx => {
+      const date = new Date(tx.timestamp).toISOString().split('T')[0];
+      dates.add(date);
+    });
+    return Array.from(dates).sort().reverse();
+  };
 
   useEffect(() => {
     filterSales();
@@ -124,7 +421,10 @@ const SalesReports = ({ isOpen, onClose }: SalesReportsProps) => {
     // Filtrar por categoría
     if (category !== 'all') {
       filtered = filtered.filter(sale => 
-        sale.items.some(item => item.product.category === category)
+        sale.items.some(item => {
+          const itemCategory = item.product?.category || 'General';
+          return itemCategory === category;
+        })
       );
     }
 
@@ -163,14 +463,16 @@ const SalesReports = ({ isOpen, onClose }: SalesReportsProps) => {
 
   const categoryStats = filteredSales.reduce((acc, sale) => {
     sale.items.forEach(item => {
-      acc[item.product.category] = (acc[item.product.category] || 0) + item.quantity;
+      const category = item.product?.category || 'General';
+      acc[category] = (acc[category] || 0) + item.quantity;
     });
     return acc;
   }, {} as { [key: string]: number });
 
   const topProducts = filteredSales.reduce((acc, sale) => {
     sale.items.forEach(item => {
-      acc[item.product.name] = (acc[item.product.name] || 0) + item.quantity;
+      const productName = item.product?.name || 'Producto sin nombre';
+      acc[productName] = (acc[productName] || 0) + item.quantity;
     });
     return acc;
   }, {} as { [key: string]: number });
@@ -178,6 +480,31 @@ const SalesReports = ({ isOpen, onClose }: SalesReportsProps) => {
   const topProductsArray = Object.entries(topProducts)
     .sort(([,a], [,b]) => b - a)
     .slice(0, 5);
+
+  // Calculate top products with revenue
+  const topProductsWithRevenue = filteredSales.reduce((acc, sale) => {
+    sale.items.forEach(item => {
+      const productName = item.product?.name || 'Producto sin nombre';
+      const productPrice = item.product?.price || 0;
+      
+      if (!acc[productName]) {
+        acc[productName] = {
+          quantity: 0,
+          revenue: 0
+        };
+      }
+      acc[productName].quantity += item.quantity;
+      acc[productName].revenue += productPrice * item.quantity;
+    });
+    return acc;
+  }, {} as { [key: string]: { quantity: number; revenue: number } });
+
+  const topProductsArrayWithRevenue = Object.entries(topProductsWithRevenue)
+    .sort(([,a], [,b]) => b.quantity - a.quantity)
+    .slice(0, 5);
+
+  // Calculate total tickets (same as total sales for now)
+  const totalTickets = filteredSales.length;
 
   const renderSummary = () => (
     <div className="reports-summary">
@@ -359,15 +686,442 @@ const SalesReports = ({ isOpen, onClose }: SalesReportsProps) => {
     </div>
   );
 
+  const loadStats = async () => {
+    // Check cache first - only use cache if data hasn't changed
+    if (statsCache && view === 'stats' && statsCache.totalSales === totalSales) {
+      return;
+    }
+
+    setIsStatsLoading(true);
+    try {
+      // Simulate loading delay for better UX
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      // Stats are already calculated from filteredSales
+      // Cache the results
+      setStatsCache({
+        totalSales,
+        totalRevenue,
+        averageOrderValue: averageTicket,
+        totalTickets,
+        paymentMethodStats,
+        topProducts: topProductsArrayWithRevenue
+      });
+    } catch (error) {
+      console.error('Error loading statistics:', error);
+      toast.error('Error al cargar estadísticas');
+    } finally {
+      setIsStatsLoading(false);
+    }
+  };
+
+  // Invalidate cache when filteredSales changes
+  useEffect(() => {
+    if (statsCache && statsCache.totalSales !== totalSales) {
+      setStatsCache(null);
+    }
+  }, [totalSales, statsCache]);
+
+  useEffect(() => {
+    if (view === 'stats' && isOpen) {
+      loadStats();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, isOpen]);
+
+  const renderStats = () => {
+    const stats = statsCache || {
+      totalSales,
+      totalRevenue,
+      averageOrderValue: averageTicket,
+      totalTickets,
+      paymentMethodStats,
+      topProducts: topProductsArrayWithRevenue
+    };
+
+    if (isStatsLoading) {
+      return (
+        <div className="stats-loading">
+          <RefreshCw size={32} className="spinning" />
+          <p>Cargando estadísticas...</p>
+        </div>
+      );
+    }
+
+    return (
+      <div className="stats-view">
+        {/* Key Metrics Cards */}
+        <div className="stats-grid">
+          <div className="stat-card">
+            <div className="stat-icon" style={{ background: '#3b82f6' }}>
+              <ShoppingCart size={24} />
+            </div>
+            <div className="stat-info">
+              <h3>{stats.totalSales}</h3>
+              <p>Total Sales</p>
+            </div>
+          </div>
+          
+          <div className="stat-card">
+            <div className="stat-icon" style={{ background: '#059669' }}>
+              <DollarSign size={24} />
+            </div>
+            <div className="stat-info">
+              <h3>${stats.totalRevenue.toFixed(2)}</h3>
+              <p>Total Revenue</p>
+            </div>
+          </div>
+          
+          <div className="stat-card">
+            <div className="stat-icon" style={{ background: '#f59e0b' }}>
+              <TrendingUp size={24} />
+            </div>
+            <div className="stat-info">
+              <h3>${stats.averageOrderValue.toFixed(2)}</h3>
+              <p>Average Order Value</p>
+            </div>
+          </div>
+          
+          <div className="stat-card">
+            <div className="stat-icon" style={{ background: '#8b5cf6' }}>
+              <FileText size={24} />
+            </div>
+            <div className="stat-info">
+              <h3>{stats.totalTickets}</h3>
+              <p>Total Tickets</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Sales by Payment Method Section */}
+        <div className="stats-section">
+          <h3>Sales by Payment Method</h3>
+          <div className="payment-methods-stats">
+            {Object.entries(stats.paymentMethodStats).map(([method, count]) => (
+              <div key={method} className="payment-method-stat">
+                <div className="payment-method-header">
+                  <div 
+                    className="payment-method-indicator"
+                    style={{ backgroundColor: getPaymentMethodColor(method) }}
+                  />
+                  <span className="payment-method-name">{getPaymentMethodName(method)}</span>
+                </div>
+                <div className="payment-method-count">
+                  <strong>{count as number}</strong>
+                  <span>transactions</span>
+                </div>
+              </div>
+            ))}
+            {Object.keys(stats.paymentMethodStats).length === 0 && (
+              <div className="empty-state">
+                <p>No payment method data available</p>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Top Products Performance Section */}
+        <div className="stats-section">
+          <h3>Top Products</h3>
+          <div className="top-products-stats">
+            {stats.topProducts.length > 0 ? (
+              <table className="top-products-table">
+                <thead>
+                  <tr>
+                    <th>Product Name</th>
+                    <th>Quantity</th>
+                    <th>Revenue</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {stats.topProducts.map(([productName, data]: [string, { quantity: number; revenue: number }]) => (
+                    <tr key={productName}>
+                      <td className="product-name">{productName}</td>
+                      <td className="product-quantity">{data.quantity}</td>
+                      <td className="product-revenue">${data.revenue.toFixed(2)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <div className="empty-state">
+                <p>No product data available</p>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderHistory = () => (
+    <div className="reports-history">
+      <div className="history-header">
+        <div className="history-actions">
+          <button
+            className="btn-primary"
+            onClick={() => handleGenerateDailyBlock(getTodayDate())}
+            disabled={isGeneratingBlock}
+          >
+            {isGeneratingBlock ? 'Generando...' : 'Generar Bloque Diario'}
+          </button>
+          <button
+            className="btn-secondary"
+            onClick={handleVerifyChain}
+            disabled={isVerifying || blocks.length === 0}
+          >
+            <Shield size={16} />
+            Verificar Cadena
+          </button>
+        </div>
+        {verificationResult && (
+          <div className={`verification-result ${verificationResult.valid ? 'valid' : 'invalid'}`}>
+            {verificationResult.valid ? (
+              <CheckCircle size={20} />
+            ) : (
+              <AlertCircle size={20} />
+            )}
+            <span>
+              {verificationResult.valid 
+                ? 'Verificación exitosa' 
+                : `Errores: ${verificationResult.errors.join(', ')}`}
+            </span>
+          </div>
+        )}
+      </div>
+
+      <div className="history-content">
+        <div className="blocks-section">
+          <h3>Bloques Diarios</h3>
+          {blocks.length === 0 ? (
+            <div className="empty-state">
+              <Layers size={48} />
+              <p>No hay bloques generados</p>
+              <p className="empty-state-hint">Genera un bloque diario para comenzar</p>
+            </div>
+          ) : (
+            <div className="blocks-list">
+              {blocks.map(block => (
+                <div 
+                  key={block.id} 
+                  className={`block-card ${selectedBlock?.id === block.id ? 'selected' : ''}`}
+                  onClick={() => {
+                    setSelectedBlock(block);
+                    setSelectedTransaction(null);
+                    setMerkleProof(null);
+                  }}
+                >
+                  <div className="block-header">
+                    <div className="block-info">
+                      <h4>Bloque {new Date(block.date).toLocaleDateString()}</h4>
+                      <span className="block-id">{block.id}</span>
+                    </div>
+                    <button
+                      className="action-btn"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleVerifyBlock(block);
+                      }}
+                      disabled={isVerifying}
+                    >
+                      <Shield size={16} />
+                    </button>
+                  </div>
+                  <div className="block-details">
+                    <div className="block-detail-item">
+                      <span>Transacciones:</span>
+                      <strong>{block.transactions.length}</strong>
+                    </div>
+                    <div className="block-detail-item">
+                      <span>Merkle Root:</span>
+                      <code className="hash-code">{block.merkleRoot.substring(0, 16)}...</code>
+                    </div>
+                    <div className="block-detail-item">
+                      <span>Block Hash:</span>
+                      <code className="hash-code">{block.blockHash.substring(0, 16)}...</code>
+                    </div>
+                    {block.previousBlockHash && (
+                      <div className="block-detail-item">
+                        <span>Previous Block:</span>
+                        <code className="hash-code">{block.previousBlockHash.substring(0, 16)}...</code>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {selectedBlock && (
+          <div className="block-details-section">
+            <div className="section-header">
+              <h3>Detalles del Bloque</h3>
+              <button className="close-btn" onClick={() => setSelectedBlock(null)}>
+                <X size={20} />
+              </button>
+            </div>
+            <div className="block-full-details">
+              <div className="detail-group">
+                <label>ID del Bloque:</label>
+                <div className="hash-display">
+                  <code>{selectedBlock.id}</code>
+                  <button className="copy-btn" onClick={() => copyToClipboard(selectedBlock.id)}>
+                    <Copy size={14} />
+                  </button>
+                </div>
+              </div>
+              <div className="detail-group">
+                <label>Fecha:</label>
+                <span>{new Date(selectedBlock.date).toLocaleDateString()}</span>
+              </div>
+              <div className="detail-group">
+                <label>Merkle Root:</label>
+                <div className="hash-display">
+                  <code>{selectedBlock.merkleRoot}</code>
+                  <button className="copy-btn" onClick={() => copyToClipboard(selectedBlock.merkleRoot)}>
+                    <Copy size={14} />
+                  </button>
+                </div>
+              </div>
+              <div className="detail-group">
+                <label>Block Hash:</label>
+                <div className="hash-display">
+                  <code>{selectedBlock.blockHash}</code>
+                  <button className="copy-btn" onClick={() => copyToClipboard(selectedBlock.blockHash)}>
+                    <Copy size={14} />
+                  </button>
+                </div>
+              </div>
+              {selectedBlock.previousBlockHash && (
+                <div className="detail-group">
+                  <label>Previous Block Hash:</label>
+                  <div className="hash-display">
+                    <code>{selectedBlock.previousBlockHash}</code>
+                    <button className="copy-btn" onClick={() => copyToClipboard(selectedBlock.previousBlockHash!)}>
+                      <Copy size={14} />
+                    </button>
+                  </div>
+                </div>
+              )}
+              <div className="transactions-list">
+                <h4>Transacciones ({selectedBlock.transactions.length})</h4>
+                {selectedBlock.transactions.map(tx => (
+                  <div
+                    key={tx.id}
+                    className={`transaction-item ${selectedTransaction?.id === tx.id ? 'selected' : ''}`}
+                    onClick={() => {
+                      setSelectedTransaction(tx);
+                      handleVerifyTransaction(tx);
+                    }}
+                  >
+                    <div className="transaction-header">
+                      <span className="transaction-id">{tx.id}</span>
+                      <span className={`action-badge ${tx.action}`}>{tx.action}</span>
+                    </div>
+                    <div className="transaction-details">
+                      <span>Venta #{tx.saleId}</span>
+                      <span>{new Date(tx.timestamp).toLocaleString()}</span>
+                    </div>
+                    <div className="transaction-hash">
+                      <code>{tx.hash.substring(0, 24)}...</code>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {selectedTransaction && merkleProof && (
+          <div className="merkle-proof-section">
+            <div className="section-header">
+              <h3>Prueba de Merkle</h3>
+              <button className="close-btn" onClick={() => setMerkleProof(null)}>
+                <X size={20} />
+              </button>
+            </div>
+            <div className="merkle-proof-details">
+              <div className="detail-group">
+                <label>Transaction Hash:</label>
+                <div className="hash-display">
+                  <code>{merkleProof.transactionHash}</code>
+                  <button className="copy-btn" onClick={() => copyToClipboard(merkleProof.transactionHash)}>
+                    <Copy size={14} />
+                  </button>
+                </div>
+              </div>
+              <div className="detail-group">
+                <label>Merkle Root:</label>
+                <div className="hash-display">
+                  <code>{merkleProof.merkleRoot}</code>
+                  <button className="copy-btn" onClick={() => copyToClipboard(merkleProof.merkleRoot)}>
+                    <Copy size={14} />
+                  </button>
+                </div>
+              </div>
+              <div className="detail-group">
+                <label>Leaf Index:</label>
+                <span>{merkleProof.leafIndex}</span>
+              </div>
+              <div className="detail-group">
+                <label>Proof Path ({merkleProof.proof.length} hashes):</label>
+                <div className="proof-path">
+                  {merkleProof.proof.map((hash, index) => (
+                    <div key={index} className="proof-hash">
+                      <code>{hash}</code>
+                      <button className="copy-btn" onClick={() => copyToClipboard(hash)}>
+                        <Copy size={14} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              {verificationResult && (
+                <div className={`verification-status ${verificationResult.valid ? 'valid' : 'invalid'}`}>
+                  {verificationResult.valid ? (
+                    <>
+                      <CheckCircle size={20} />
+                      <span>Prueba de Merkle válida</span>
+                    </>
+                  ) : (
+                    <>
+                      <AlertCircle size={20} />
+                      <span>Prueba de Merkle inválida</span>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
   if (!isOpen) return null;
 
   return (
     <div className="reports-overlay">
       <div className="reports-modal">
         <div className="reports-header">
-          <h2>Reportes de Ventas</h2>
+          <h2>Ventas</h2>
           <div className="header-actions">
-            <button className="action-btn" title="Actualizar">
+            {isShopIdConfigured() && (
+              <button 
+                className="action-btn" 
+                title="Cargar desde Servidor"
+                onClick={loadSalesFromServer}
+                disabled={isLoading}
+              >
+                <CloudDownload size={20} />
+              </button>
+            )}
+            <button className="action-btn" title="Actualizar" onClick={() => {
+              const sampleSales = generateSampleSales();
+              setSales(sampleSales);
+              setFilteredSales(sampleSales);
+            }}>
               <RefreshCw size={20} />
             </button>
             <button className="action-btn" title="Exportar">
@@ -425,6 +1179,13 @@ const SalesReports = ({ isOpen, onClose }: SalesReportsProps) => {
               Resumen
             </button>
             <button 
+              className={`view-tab ${view === 'stats' ? 'active' : ''}`}
+              onClick={() => setView('stats')}
+            >
+              <Activity size={20} />
+              Stats
+            </button>
+            <button 
               className={`view-tab ${view === 'detailed' ? 'active' : ''}`}
               onClick={() => setView('detailed')}
             >
@@ -438,13 +1199,22 @@ const SalesReports = ({ isOpen, onClose }: SalesReportsProps) => {
               <TrendingUp size={20} />
               Análisis
             </button>
+            <button 
+              className={`view-tab ${view === 'history' ? 'active' : ''}`}
+              onClick={() => setView('history')}
+            >
+              <History size={20} />
+              Historia
+            </button>
           </div>
 
           {/* Contenido de la vista */}
           <div className="view-content">
             {view === 'summary' && renderSummary()}
+            {view === 'stats' && renderStats()}
             {view === 'detailed' && renderDetailed()}
             {view === 'analytics' && renderAnalytics()}
+            {view === 'history' && renderHistory()}
           </div>
         </div>
       </div>

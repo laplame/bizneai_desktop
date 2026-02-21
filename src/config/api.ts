@@ -2,7 +2,7 @@
 export const API_CONFIG = {
   // URL base de la API
   BASE_URL: process.env.NODE_ENV === 'production' 
-    ? 'https://api.bizneai.com' 
+    ? 'https://www.bizneai.com' 
     : 'http://localhost:3001',
   
   // Endpoints de la tienda
@@ -22,6 +22,9 @@ export const API_CONFIG = {
     'Accept': 'application/json'
   }
 };
+
+// Re-export helper functions from utils
+export { getShopId, getMcpUrl, isShopIdConfigured, getShopDataFromMcp } from '../utils/shopIdHelper';
 
 // Función para hacer requests a la API
 export const apiRequest = async (

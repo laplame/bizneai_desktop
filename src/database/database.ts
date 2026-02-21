@@ -198,6 +198,46 @@ class DatabaseManager {
       )
     `);
 
+    // Tabla de transacciones (Merkle Tree)
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS transactions (
+        id TEXT PRIMARY KEY,
+        sale_id INTEGER NOT NULL,
+        action TEXT NOT NULL, -- 'create', 'update', 'delete', 'restore'
+        timestamp TEXT NOT NULL,
+        data TEXT NOT NULL, -- JSON string
+        previous_data TEXT, -- JSON string
+        hash TEXT NOT NULL UNIQUE,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (sale_id) REFERENCES sales (id) ON DELETE CASCADE
+      )
+    `);
+
+    // Tabla de bloques diarios (Merkle Tree)
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS daily_blocks (
+        id TEXT PRIMARY KEY,
+        date TEXT NOT NULL,
+        merkle_root TEXT NOT NULL,
+        previous_block_hash TEXT,
+        block_hash TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL,
+        UNIQUE(date, block_hash)
+      )
+    `);
+
+    // Tabla de relación bloque-transacciones
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS block_transactions (
+        block_id TEXT NOT NULL,
+        transaction_id TEXT NOT NULL,
+        transaction_index INTEGER NOT NULL,
+        PRIMARY KEY (block_id, transaction_id),
+        FOREIGN KEY (block_id) REFERENCES daily_blocks (id) ON DELETE CASCADE,
+        FOREIGN KEY (transaction_id) REFERENCES transactions (id) ON DELETE CASCADE
+      )
+    `);
+
     console.log('Database tables created successfully');
   }
 
@@ -399,6 +439,246 @@ class DatabaseManager {
     `);
     
     return stmt.all(storeId);
+  }
+
+  // Métodos para transacciones (Merkle Tree)
+  addTransaction(transaction: {
+    id: string;
+    saleId: number;
+    action: 'create' | 'update' | 'delete' | 'restore';
+    timestamp: string;
+    data: any;
+    previousData?: any;
+    hash: string;
+  }): void {
+    if (!this.db) throw new Error('Database not initialized');
+    
+    const stmt = this.db.prepare(`
+      INSERT INTO transactions (id, sale_id, action, timestamp, data, previous_data, hash)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+    
+    stmt.run(
+      transaction.id,
+      transaction.saleId,
+      transaction.action,
+      transaction.timestamp,
+      JSON.stringify(transaction.data),
+      transaction.previousData ? JSON.stringify(transaction.previousData) : null,
+      transaction.hash
+    );
+  }
+
+  getTransactions(limit: number = 1000): any[] {
+    if (!this.db) throw new Error('Database not initialized');
+    
+    const stmt = this.db.prepare(`
+      SELECT 
+        id,
+        sale_id,
+        action,
+        timestamp,
+        data,
+        previous_data,
+        hash,
+        created_at
+      FROM transactions
+      ORDER BY timestamp DESC
+      LIMIT ?
+    `);
+    
+    const rows = stmt.all(limit) as any[];
+    return rows.map(row => ({
+      id: row.id,
+      saleId: row.sale_id,
+      action: row.action,
+      timestamp: row.timestamp,
+      data: JSON.parse(row.data),
+      previousData: row.previous_data ? JSON.parse(row.previous_data) : undefined,
+      hash: row.hash,
+      createdAt: row.created_at
+    }));
+  }
+
+  getTransactionsByDate(date: string): any[] {
+    if (!this.db) throw new Error('Database not initialized');
+    
+    const stmt = this.db.prepare(`
+      SELECT 
+        id,
+        sale_id,
+        action,
+        timestamp,
+        data,
+        previous_data,
+        hash,
+        created_at
+      FROM transactions
+      WHERE DATE(timestamp) = DATE(?)
+      ORDER BY timestamp ASC
+    `);
+    
+    const rows = stmt.all(date) as any[];
+    return rows.map(row => ({
+      id: row.id,
+      saleId: row.sale_id,
+      action: row.action,
+      timestamp: row.timestamp,
+      data: JSON.parse(row.data),
+      previousData: row.previous_data ? JSON.parse(row.previous_data) : undefined,
+      hash: row.hash,
+      createdAt: row.created_at
+    }));
+  }
+
+  getTransactionById(id: string): any | undefined {
+    if (!this.db) throw new Error('Database not initialized');
+    
+    const stmt = this.db.prepare('SELECT * FROM transactions WHERE id = ?');
+    const row = stmt.get(id) as any | undefined;
+    
+    if (!row) return undefined;
+    
+    return {
+      id: row.id,
+      saleId: row.sale_id,
+      action: row.action,
+      timestamp: row.timestamp,
+      data: JSON.parse(row.data),
+      previousData: row.previous_data ? JSON.parse(row.previous_data) : undefined,
+      hash: row.hash,
+      createdAt: row.created_at
+    };
+  }
+
+  // Métodos para bloques diarios (Merkle Tree)
+  addBlock(block: {
+    id: string;
+    date: string;
+    transactions: any[];
+    merkleRoot: string;
+    previousBlockHash: string | null;
+    blockHash: string;
+    createdAt: string;
+  }): void {
+    if (!this.db) throw new Error('Database not initialized');
+    
+    const transaction = this.db.transaction(() => {
+      // Insertar bloque
+      const blockStmt = this.db!.prepare(`
+        INSERT INTO daily_blocks (id, date, merkle_root, previous_block_hash, block_hash, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `);
+      
+      blockStmt.run(
+        block.id,
+        block.date,
+        block.merkleRoot,
+        block.previousBlockHash,
+        block.blockHash,
+        block.createdAt
+      );
+      
+      // Insertar relaciones bloque-transacciones
+      const relationStmt = this.db!.prepare(`
+        INSERT INTO block_transactions (block_id, transaction_id, transaction_index)
+        VALUES (?, ?, ?)
+      `);
+      
+      block.transactions.forEach((tx, index) => {
+        relationStmt.run(block.id, tx.id, index);
+      });
+    });
+    
+    transaction();
+  }
+
+  getBlocks(limit: number = 100): any[] {
+    if (!this.db) throw new Error('Database not initialized');
+    
+    const stmt = this.db.prepare(`
+      SELECT 
+        id,
+        date,
+        merkle_root,
+        previous_block_hash,
+        block_hash,
+        created_at
+      FROM daily_blocks
+      ORDER BY date DESC, created_at DESC
+      LIMIT ?
+    `);
+    
+    const rows = stmt.all(limit) as any[];
+    return rows.map(row => ({
+      id: row.id,
+      date: row.date,
+      merkleRoot: row.merkle_root,
+      previousBlockHash: row.previous_block_hash,
+      blockHash: row.block_hash,
+      createdAt: row.created_at
+    }));
+  }
+
+  getBlockById(id: string): any | undefined {
+    if (!this.db) throw new Error('Database not initialized');
+    
+    const blockStmt = this.db.prepare('SELECT * FROM daily_blocks WHERE id = ?');
+    const blockRow = blockStmt.get(id) as any | undefined;
+    
+    if (!blockRow) return undefined;
+    
+    // Obtener transacciones del bloque
+    const txStmt = this.db.prepare(`
+      SELECT 
+        t.id,
+        t.sale_id,
+        t.action,
+        t.timestamp,
+        t.data,
+        t.previous_data,
+        t.hash
+      FROM transactions t
+      INNER JOIN block_transactions bt ON t.id = bt.transaction_id
+      WHERE bt.block_id = ?
+      ORDER BY bt.transaction_index ASC
+    `);
+    
+    const txRows = txStmt.all(id) as any[];
+    const transactions = txRows.map(row => ({
+      id: row.id,
+      saleId: row.sale_id,
+      action: row.action,
+      timestamp: row.timestamp,
+      data: JSON.parse(row.data),
+      previousData: row.previous_data ? JSON.parse(row.previous_data) : undefined,
+      hash: row.hash
+    }));
+    
+    return {
+      id: blockRow.id,
+      date: blockRow.date,
+      transactions,
+      merkleRoot: blockRow.merkle_root,
+      previousBlockHash: blockRow.previous_block_hash,
+      blockHash: blockRow.block_hash,
+      createdAt: blockRow.created_at
+    };
+  }
+
+  getLastBlock(): any | undefined {
+    if (!this.db) throw new Error('Database not initialized');
+    
+    const stmt = this.db.prepare(`
+      SELECT * FROM daily_blocks
+      ORDER BY date DESC, created_at DESC
+      LIMIT 1
+    `);
+    
+    const row = stmt.get() as any | undefined;
+    if (!row) return undefined;
+    
+    return this.getBlockById(row.id);
   }
 
   // Método para cerrar la base de datos
