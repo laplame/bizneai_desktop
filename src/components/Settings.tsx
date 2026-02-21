@@ -57,6 +57,7 @@ import { API_CONFIG, apiRequest, handleApiError } from '../config/api';
 import { StoreConfig } from '../types/store';
 import { useStore } from '../contexts/StoreContext';
 import { getStoreTypes, checkStoreTypesForUpdates, getStoreTypeLabel } from '../data/storeTypes';
+import { mapMcpProductToLocal } from '../utils/shopIdHelper';
 
 interface SettingsProps {
   isSetupMode?: boolean;
@@ -286,6 +287,7 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
       if (response.ok) {
         const result = await response.json();
         const shopData = result.data?.shop || result.shop;
+        const mcpProducts = result.data?.products || result.products || [];
         
         if (shopData) {
           // Mapear datos del servidor a los campos del formulario
@@ -325,6 +327,32 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
             shopId: shopData._id || null,
             lastSync: new Date().toISOString()
           }));
+
+          // Guardar nombre en server-config para que POS lo resuelva rápido en arranque
+          try {
+            const existingServerConfigRaw = localStorage.getItem('bizneai-server-config');
+            if (existingServerConfigRaw) {
+              const existingServerConfig = JSON.parse(existingServerConfigRaw);
+              localStorage.setItem(
+                'bizneai-server-config',
+                JSON.stringify({
+                  ...existingServerConfig,
+                  storeName: shopData.storeName || existingServerConfig.storeName || ''
+                })
+              );
+            }
+          } catch (configError) {
+            console.warn('Could not persist server storeName:', configError);
+          }
+
+          // Guardar productos reales del MCP para que POS no caiga en catálogo de muestra
+          if (Array.isArray(mcpProducts) && mcpProducts.length > 0) {
+            const mappedProducts = mcpProducts.map((product: any, index: number) =>
+              mapMcpProductToLocal(product, index)
+            );
+            localStorage.setItem('bizneai-products', JSON.stringify(mappedProducts));
+            window.dispatchEvent(new Event('products-updated'));
+          }
 
           toast.success('Datos del shop cargados desde el servidor');
           return true;
@@ -567,16 +595,41 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
   const handleSyncToServer = async () => {
     setIsLoading(true);
     try {
+      // Si hay MCP configurado, priorizar sincronización real contra el servidor
+      if (serverConfig.mcpUrl) {
+        const loaded = await loadShopDataFromServer(serverConfig.mcpUrl);
+        if (loaded) {
+          const latestServerConfig = localStorage.getItem('bizneai-server-config');
+          let currentShopId = serverConfig.shopId;
+          if (latestServerConfig) {
+            try {
+              currentShopId = JSON.parse(latestServerConfig).shopId || currentShopId;
+            } catch {
+              // ignore parse errors
+            }
+          }
+
+          setServerSync({
+            synced: true,
+            shopId: currentShopId || serverSync.shopId || null,
+            lastSync: new Date().toISOString()
+          });
+          toast.success(`Sincronizado exitosamente. Shop ID: ${currentShopId || serverSync.shopId || 'N/A'}`);
+          await loadConfiguration();
+          return;
+        }
+      }
+
+      // Fallback local si no hay MCP o falla la carga remota
       const config = await storeAPI.getConfig();
       if (config) {
-        // Simulate server sync
-        await new Promise(resolve => setTimeout(resolve, 1500));
+        await new Promise(resolve => setTimeout(resolve, 500));
         setServerSync({
           synced: true,
           shopId: config.clientId || `SHOP-${Date.now()}`,
           lastSync: new Date().toISOString()
         });
-        toast.success(`Sincronizado exitosamente. Shop ID: ${serverSync.shopId || config.clientId}`);
+        toast.success(`Sincronizado localmente. Shop ID: ${config.clientId || 'N/A'}`);
         await loadConfiguration();
       }
     } catch (error) {

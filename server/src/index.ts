@@ -5,6 +5,7 @@ import morgan from 'morgan';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import path from 'path';
+import { fileURLToPath } from 'url';
 
 // Import routes
 import shopRoutes from './routes/shopRoutes';
@@ -16,10 +17,7 @@ import chatRoutes from './routes/chatRoutes';
 import inventoryRoutes from './routes/inventoryRoutes';
 import ticketRoutes from './routes/ticketRoutes';
 import orderRoutes from './routes/orderRoutes';
-import userRoutes from './routes/userRoutes';
-import cryptoRoutes from './routes/cryptoRoutes';
 import imageRoutes from './routes/imageRoutes';
-import databaseRoutes from './routes/databaseRoutes';
 
 // Import middleware
 import { errorHandler } from './middleware/errorHandler';
@@ -28,6 +26,8 @@ import { validateApiKey } from './middleware/validateApiKey';
 
 const app = express();
 const server = createServer(app);
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 const io = new Server(server, {
   cors: {
     origin: process.env.NODE_ENV === 'production' 
@@ -94,10 +94,7 @@ app.use('/api/chat', chatRoutes);
 app.use('/api/inventory', inventoryRoutes);
 app.use('/api/tickets', ticketRoutes);
 app.use('/api/orders', orderRoutes);
-app.use('/api/users', userRoutes);
-app.use('/api/crypto', cryptoRoutes);
 app.use('/api', imageRoutes);
-app.use('/api/database', databaseRoutes);
 
 // Stripe webhook (no body parsing for webhooks)
 app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), (req, res) => {

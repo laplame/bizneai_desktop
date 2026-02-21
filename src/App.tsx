@@ -25,7 +25,7 @@ import {
   RefreshCw
 } from 'lucide-react';
 import { toast, Toaster } from 'react-hot-toast';
-import { getProductsFromMcp, mapMcpProductToLocal, isShopIdConfigured } from './utils/shopIdHelper';
+import { getProductsFromMcp, mapMcpProductToLocal, getShopDataFromMcp } from './utils/shopIdHelper';
 import BarcodeScanner from './components/BarcodeScanner';
 import CheckoutModal from './components/CheckoutModal';
 import SalesReports from './components/SalesReports';
@@ -91,6 +91,122 @@ const sampleProducts: Product[] = [
   { id: 11, name: 'Tarta de Manzana', price: 3.50, category: 'Postres', stock: 20, barcode: '1234567890133' },
   { id: 12, name: 'Helado de Vainilla', price: 2.50, category: 'Postres', stock: 30, barcode: '1234567890134' },
 ];
+
+const CLOUDINARY_PRODUCTS_BASE_URL = 'https://res.cloudinary.com/pin-pos/image/upload';
+const IMAGE_FILENAME_REGEX = /^(images-\d{13}-[A-Za-z0-9_-]+\.(?:jpg|jpeg|png|webp|gif))$/i;
+
+const getApiOriginFromConfig = (): string => {
+  try {
+    const serverConfigRaw = localStorage.getItem('bizneai-server-config');
+    if (!serverConfigRaw) return 'https://www.bizneai.com';
+
+    const serverConfig = JSON.parse(serverConfigRaw);
+    if (serverConfig?.mcpUrl) return new URL(serverConfig.mcpUrl).origin;
+    if (serverConfig?.serverUrl) return new URL(serverConfig.serverUrl).origin;
+  } catch {
+    // Use default origin
+  }
+
+  return 'https://www.bizneai.com';
+};
+
+const normalizeProductImageUrl = (value?: string): string => {
+  if (!value || typeof value !== 'string') return '';
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+
+  const filename = trimmed.split('?')[0].split('#')[0].split('/').pop() || trimmed;
+  if (IMAGE_FILENAME_REGEX.test(filename)) {
+    const millisMatch = filename.match(/^images-(\d{13})-/i);
+    if (millisMatch) {
+      const version = millisMatch[1].slice(0, 10);
+      return `${CLOUDINARY_PRODUCTS_BASE_URL}/v${version}/products/${filename}`;
+    }
+  }
+
+  if (trimmed.startsWith('/')) {
+    return `${getApiOriginFromConfig()}${trimmed}`;
+  }
+
+  return trimmed;
+};
+
+const normalizeProductId = (rawId: unknown, fallbackIndex: number): number => {
+  if (typeof rawId === 'number' && Number.isFinite(rawId)) return rawId;
+
+  if (typeof rawId === 'string') {
+    const numeric = Number(rawId);
+    if (Number.isFinite(numeric)) return numeric;
+
+    // Deterministic hash for Mongo-like IDs to keep a stable numeric ID
+    let hash = 0;
+    for (let i = 0; i < rawId.length; i++) {
+      hash = (hash * 31 + rawId.charCodeAt(i)) | 0;
+    }
+    return Math.abs(hash);
+  }
+
+  return fallbackIndex + 1;
+};
+
+const hydrateProductsForPos = (productsList: any[]): Product[] => {
+  return (productsList || []).map((product: any, index: number) => {
+    const imageCandidate =
+      product?.image ||
+      product?.images?.[0] ||
+      product?.imageMetadata?.cloudinaryUrls?.[0] ||
+      product?.imageMetadata?.localUrls?.[0] ||
+      '';
+
+    return {
+      ...product,
+      id: normalizeProductId(product?.id, index),
+      image: normalizeProductImageUrl(imageCandidate)
+    };
+  });
+};
+
+const looksLikeSampleCatalog = (productsList: Product[]): boolean => {
+  if (!productsList || productsList.length === 0) return false;
+  const sampleNames = new Set([
+    'Cappuccino',
+    'Café Americano',
+    'Café Latte',
+    'Muffin de Chocolate',
+    'Croissant'
+  ]);
+
+  const matches = productsList.filter((p) => sampleNames.has(p.name)).length;
+  return matches >= 3;
+};
+
+const getConfiguredMcpUrl = (): string => {
+  try {
+    const serverConfigRaw = localStorage.getItem('bizneai-server-config');
+    if (!serverConfigRaw) return '';
+    const serverConfig = JSON.parse(serverConfigRaw);
+    return serverConfig?.mcpUrl || '';
+  } catch {
+    return '';
+  }
+};
+
+const fetchProductsFromConfiguredMcp = async (): Promise<any[]> => {
+  const mcpUrl = getConfiguredMcpUrl();
+  if (!mcpUrl) return [];
+
+  try {
+    const response = await fetch(mcpUrl);
+    if (!response.ok) return [];
+    const payload = await response.json();
+    const shopData = payload?.data || payload;
+    return shopData?.products || [];
+  } catch (error) {
+    console.warn('Direct MCP fetch failed:', error);
+    return [];
+  }
+};
 
 function App() {
   const [products, setProducts] = useState<Product[]>(sampleProducts);
@@ -159,28 +275,39 @@ function App() {
         try {
           const parsedProducts = JSON.parse(savedProducts);
           if (parsedProducts && parsedProducts.length > 0) {
-            setProducts(parsedProducts);
+            const hydratedLocalProducts = hydrateProductsForPos(parsedProducts);
+            setProducts(hydratedLocalProducts);
             // Extraer categorías dinámicamente
-            setCategories(extractCategories(parsedProducts));
-            return;
+            setCategories(extractCategories(hydratedLocalProducts));
+
+            const hasAnyImage = hydratedLocalProducts.some((product) => Boolean(product.image));
+            const isSampleCatalog = looksLikeSampleCatalog(hydratedLocalProducts);
+            if ((hasAnyImage && !isSampleCatalog)) {
+              return;
+            }
           }
         } catch (error) {
           console.warn('Error parsing saved products:', error);
         }
       }
 
-      // Si hay shopId configurado, intentar cargar desde el servidor
-      if (isShopIdConfigured()) {
-        const mcpProducts = await getProductsFromMcp();
-        if (mcpProducts && mcpProducts.length > 0) {
-          const mappedProducts = mcpProducts.map((p: any, index: number) => mapMcpProductToLocal(p, index));
-          setProducts(mappedProducts);
-          // Extraer categorías dinámicamente desde el MCP
-          setCategories(extractCategories(mappedProducts));
-          // Guardar en localStorage para sincronización
-          localStorage.setItem('bizneai-products', JSON.stringify(mappedProducts));
-          return;
-        }
+      // 1) Intentar carga directa con la mcpUrl configurada en Settings
+      let mcpProducts = await fetchProductsFromConfiguredMcp();
+
+      // 2) Fallback al helper global
+      if (!mcpProducts || mcpProducts.length === 0) {
+        mcpProducts = await getProductsFromMcp();
+      }
+
+      if (mcpProducts && mcpProducts.length > 0) {
+        const mappedProducts = mcpProducts.map((p: any, index: number) => mapMcpProductToLocal(p, index));
+        const hydratedMappedProducts = hydrateProductsForPos(mappedProducts);
+        setProducts(hydratedMappedProducts);
+        // Extraer categorías dinámicamente desde el MCP
+        setCategories(extractCategories(hydratedMappedProducts));
+        // Guardar en localStorage para sincronización
+        localStorage.setItem('bizneai-products', JSON.stringify(hydratedMappedProducts));
+        return;
       }
 
       // Fallback a productos de muestra
@@ -219,7 +346,7 @@ function App() {
       if (e.key === 'bizneai-products' && e.newValue) {
         try {
           const parsedProducts = JSON.parse(e.newValue);
-          setProducts(parsedProducts);
+          setProducts(hydrateProductsForPos(parsedProducts));
         } catch (error) {
           console.error('Error parsing products from storage:', error);
         }
@@ -231,9 +358,10 @@ function App() {
       if (savedProducts) {
         try {
           const parsedProducts = JSON.parse(savedProducts);
-          setProducts(parsedProducts);
+          const hydratedProducts = hydrateProductsForPos(parsedProducts);
+          setProducts(hydratedProducts);
           // Actualizar categorías cuando se actualizan los productos
-          setCategories(extractCategories(parsedProducts));
+          setCategories(extractCategories(hydratedProducts));
         } catch (error) {
           console.error('Error parsing products:', error);
         }
@@ -812,7 +940,7 @@ function App() {
 
   // Componente interno para usar el hook useStore
   const AppContent = () => {
-    const { storeIdentifiers } = useStore();
+    const { storeIdentifiers, setStoreIdentifiers } = useStore();
     // Verificar storeType desde localStorage también por si no está en context
     // También verificar desde la configuración guardada
     const savedConfig = localStorage.getItem('bizneai-store-config');
@@ -831,7 +959,61 @@ function App() {
                                savedStoreType === 'coffee-shop' || 
                                savedStoreType === 'CoffeeShop' ||
                                savedStoreType === 'Restaurant';
-    const storeName = storeIdentifiers.storeName || 'Mi Tienda';
+    let configuredStoreName = '';
+    try {
+      const storeConfigRaw = localStorage.getItem('bizneai-store-config');
+      const serverConfigRaw = localStorage.getItem('bizneai-server-config');
+      const storeConfig = storeConfigRaw ? JSON.parse(storeConfigRaw) : null;
+      const serverConfig = serverConfigRaw ? JSON.parse(serverConfigRaw) : null;
+      configuredStoreName =
+        storeConfig?.storeName ||
+        storeConfig?.businessName ||
+        serverConfig?.storeName ||
+        '';
+    } catch {
+      configuredStoreName = '';
+    }
+
+    const [resolvedStoreName, setResolvedStoreName] = useState<string>(
+      storeIdentifiers.storeName || configuredStoreName || 'Tienda'
+    );
+
+    useEffect(() => {
+      setResolvedStoreName(storeIdentifiers.storeName || configuredStoreName || 'Tienda');
+    }, [storeIdentifiers.storeName, configuredStoreName]);
+
+    useEffect(() => {
+      const loadNameFromMcp = async () => {
+        if (storeIdentifiers.storeName) return;
+
+        const mcpUrl = getConfiguredMcpUrl();
+        if (mcpUrl) {
+          try {
+            const response = await fetch(mcpUrl);
+            if (response.ok) {
+              const payload = await response.json();
+              const fetchedStoreName = payload?.data?.shop?.storeName || payload?.shop?.storeName;
+              if (fetchedStoreName) {
+                setResolvedStoreName(fetchedStoreName);
+                setStoreIdentifiers({ storeName: fetchedStoreName });
+                return;
+              }
+            }
+          } catch {
+            // fallback below
+          }
+        }
+
+        const shopData = await getShopDataFromMcp();
+        const fetchedStoreName = shopData?.shop?.storeName;
+        if (fetchedStoreName) {
+          setResolvedStoreName(fetchedStoreName);
+          setStoreIdentifiers({ storeName: fetchedStoreName });
+        }
+      };
+
+      loadNameFromMcp();
+    }, [storeIdentifiers.storeName, setStoreIdentifiers]);
     
     // Debug temporal
     if (activeSection === 'kitchen') {
@@ -851,7 +1033,7 @@ function App() {
           <div className="sidebar-section">
             <div className="sidebar-title">
               <Store size={20} />
-              {storeName}
+              {resolvedStoreName}
             </div>
           </div>
 
@@ -1068,7 +1250,11 @@ function App() {
                         // Componente interno para manejar el estado de carga de imagen
                         const ProductCard = ({ product }: { product: Product }) => {
                           const [imageError, setImageError] = useState(false);
-                          const [hasImage, setHasImage] = useState(!!product.image);
+                          
+                          // Reset image error when product image changes after sync
+                          useEffect(() => {
+                            setImageError(false);
+                          }, [product.image]);
 
                           return (
                             <div
@@ -1080,7 +1266,7 @@ function App() {
                               title={`Click to add ${product.name} to cart`}
                       >
                         <div className="product-image">
-                                {hasImage && !imageError ? (
+                                {Boolean(product.image) && !imageError ? (
                                   <img 
                                     src={product.image} 
                                     alt={product.name}
