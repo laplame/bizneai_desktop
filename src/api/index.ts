@@ -10,6 +10,7 @@ export * from './payments';
 export * from './chat';
 export * from './inventory';
 export * from './tickets';
+export * from './sales';
 export * from './orders';
 export * from './users';
 export * from './crypto';

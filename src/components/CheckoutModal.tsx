@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { 
   CreditCard, 
   DollarSign, 
@@ -93,8 +93,10 @@ const CheckoutModal = ({ isOpen, onClose, total, onComplete }: CheckoutModalProp
   const finalTotal = subtotal + tax;
   const change = parseFloat(cashAmount) - finalTotal;
 
+  const wasOpenRef = useRef(false);
   useEffect(() => {
-    if (isOpen) {
+    // Solo resetear cuando el modal pasa de cerrado a abierto, no en cada render
+    if (isOpen && !wasOpenRef.current) {
       setStep('method');
       setSelectedMethod(null);
       setCashAmount('');
@@ -115,6 +117,7 @@ const CheckoutModal = ({ isOpen, onClose, total, onComplete }: CheckoutModalProp
       setMixedCardCvv('');
       setMixedCryptoCoupon('');
     }
+    wasOpenRef.current = isOpen;
   }, [isOpen]);
 
   const handleMethodSelect = (method: PaymentMethod) => {
@@ -154,7 +157,23 @@ const CheckoutModal = ({ isOpen, onClose, total, onComplete }: CheckoutModalProp
 
   const renderPaymentForm = () => {
     switch (selectedMethod) {
-      case 'cash':
+      case 'cash': {
+        // Montos lógicos: exacto, redondear a billetes comunes (20, 50, 100, 500)
+        const roundTo = (n: number, step: number) => Math.ceil(n / step) * step;
+        const exactAmount = finalTotal;
+        const amount20 = roundTo(finalTotal, 20);
+        const amount50 = roundTo(finalTotal, 50);
+        const amount100 = roundTo(finalTotal, 100);
+        const amount500 = finalTotal <= 500 ? 500 : roundTo(finalTotal, 500);
+
+        const quickAmounts = [
+          { label: 'Pago exacto', value: exactAmount },
+          ...(amount20 !== exactAmount ? [{ label: `$${amount20}`, value: amount20 }] : []),
+          ...(amount50 !== amount20 && amount50 !== exactAmount ? [{ label: `$${amount50}`, value: amount50 }] : []),
+          ...(amount100 !== amount50 && amount100 !== amount20 ? [{ label: `$${amount100}`, value: amount100 }] : []),
+          ...(amount500 !== amount100 ? [{ label: `$${amount500}`, value: amount500 }] : [])
+        ];
+
         return (
           <div className="payment-form">
             <h3>Pago en Efectivo</h3>
@@ -166,6 +185,18 @@ const CheckoutModal = ({ isOpen, onClose, total, onComplete }: CheckoutModalProp
             </div>
             <div className="input-group">
               <label>Monto recibido:</label>
+              <div className="quick-amounts">
+                {quickAmounts.map(({ label, value }) => (
+                  <button
+                    key={`${label}-${value}`}
+                    type="button"
+                    className={`quick-amount-btn ${Math.abs(parseFloat(cashAmount) - value) < 0.01 ? 'selected' : ''}`}
+                    onClick={() => setCashAmount(value.toFixed(2))}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
               <input
                 type="number"
                 value={cashAmount}
@@ -190,6 +221,7 @@ const CheckoutModal = ({ isOpen, onClose, total, onComplete }: CheckoutModalProp
             </button>
           </div>
         );
+      }
 
       case 'card':
         return (
@@ -429,11 +461,37 @@ const CheckoutModal = ({ isOpen, onClose, total, onComplete }: CheckoutModalProp
             </div>
 
             {/* Campos de pago según porcentajes */}
-            {mixedCashPercent > 0 && (
+            {mixedCashPercent > 0 && (() => {
+              const roundTo = (n: number, step: number) => Math.ceil(n / step) * step;
+              const exact = mixedCashTotal;
+              const a20 = roundTo(mixedCashTotal, 20);
+              const a50 = roundTo(mixedCashTotal, 50);
+              const a100 = roundTo(mixedCashTotal, 100);
+              const a500 = mixedCashTotal <= 500 ? 500 : roundTo(mixedCashTotal, 500);
+              const mixedQuickAmounts = [
+                { label: 'Pago exacto', value: exact },
+                ...(a20 !== exact ? [{ label: `$${a20}`, value: a20 }] : []),
+                ...(a50 !== a20 && a50 !== exact ? [{ label: `$${a50}`, value: a50 }] : []),
+                ...(a100 !== a50 && a100 !== a20 ? [{ label: `$${a100}`, value: a100 }] : []),
+                ...(a500 !== a100 ? [{ label: `$${a500}`, value: a500 }] : [])
+              ];
+              return (
               <div className="mixed-payment-detail">
                 <h4>Pago en Efectivo: ${mixedCashTotal.toFixed(2)}</h4>
                 <div className="input-group">
                   <label>Monto recibido:</label>
+                  <div className="quick-amounts">
+                    {mixedQuickAmounts.map(({ label, value }) => (
+                      <button
+                        key={`mixed-${label}-${value}`}
+                        type="button"
+                        className={`quick-amount-btn ${Math.abs(parseFloat(mixedCashAmount) - value) < 0.01 ? 'selected' : ''}`}
+                        onClick={() => setMixedCashAmount(value.toFixed(2))}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
                   <input
                     type="number"
                     value={mixedCashAmount}
@@ -450,7 +508,8 @@ const CheckoutModal = ({ isOpen, onClose, total, onComplete }: CheckoutModalProp
                   </div>
                 )}
               </div>
-            )}
+              );
+            })()}
 
             {mixedCardPercent > 0 && (
               <div className="mixed-payment-detail">

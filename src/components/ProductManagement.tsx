@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { 
   Package, 
   Plus, 
@@ -14,7 +14,6 @@ import {
   EyeOff,
   BarChart3,
   Tag,
-  DollarSign,
   Hash,
   FileText,
   ImageIcon,
@@ -33,7 +32,9 @@ import {
   CloudDownload
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
-import { getProductsFromMcp, mapMcpProductToLocal, isShopIdConfigured } from '../utils/shopIdHelper';
+import { getProductsFromMcp, mapMcpProductToLocal, isShopIdConfigured, enrichProductsWithImages } from '../utils/shopIdHelper';
+import { isSyncDue } from '../utils/syncService';
+import { shouldShowImage, markImageFailed } from '../utils/imageCache';
 import InventoryManagement from './InventoryManagement';
 
 interface Product {
@@ -61,6 +62,9 @@ interface Product {
 interface ProductManagementProps {
   isOpen: boolean;
   onClose: () => void;
+  initialView?: 'list' | 'grid' | 'analytics' | 'inventory';
+  restockProduct?: { id: number; name: string } | null;
+  onRestockComplete?: (productToAdd?: unknown) => void;
 }
 
 const categories = ['Bebidas', 'Panadería', 'Comida', 'Postres', 'Snacks', 'Bebidas Alcohólicas', 'Otros'];
@@ -175,7 +179,7 @@ const generateSampleProducts = (): Product[] => {
   return products;
 };
 
-const ProductManagement = ({ isOpen, onClose }: ProductManagementProps) => {
+const ProductManagement = ({ isOpen, onClose, initialView, restockProduct, onRestockComplete }: ProductManagementProps) => {
   const [products, setProducts] = useState<Product[]>([]);
   const [filteredProducts, setFilteredProducts] = useState<Product[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -186,61 +190,109 @@ const ProductManagement = ({ isOpen, onClose }: ProductManagementProps) => {
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [editingProduct, setEditingProduct] = useState<Partial<Product>>({});
+  const isLoadingRef = useRef(false);
+  const hasLoadedForOpenRef = useRef(false);
+  const hasServerDataRef = useRef(false);
 
-  // Load products from server
+  // Cargar productos desde localStorage (inmediato, sin loop)
+  const loadFromLocalStorage = (): Product[] => {
+    try {
+      const saved = localStorage.getItem('bizneai-products');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return Array.isArray(parsed) && parsed.length > 0 ? parsed : [];
+      }
+    } catch (e) {
+      console.warn('Error loading products from localStorage:', e);
+    }
+    return [];
+  };
+
+  // Load products from server (con guard para evitar loops)
   const loadProductsFromServer = async () => {
     if (!isShopIdConfigured()) {
       toast.error('Primero configura la URL del servidor en Configuración');
       return;
     }
+    if (isLoadingRef.current) return;
+    isLoadingRef.current = true;
+    hasServerDataRef.current = false;
 
     try {
       toast.loading('Cargando productos desde el servidor...', { id: 'loading-products' });
       const mcpProducts = await getProductsFromMcp();
       
       if (mcpProducts && mcpProducts.length > 0) {
+        hasServerDataRef.current = true;
         const mappedProducts = mcpProducts.map((p: any, index: number) => mapMcpProductToLocal(p, index));
         setProducts(mappedProducts);
         setFilteredProducts(mappedProducts);
-        // Guardar en localStorage para sincronizar con POS
         localStorage.setItem('bizneai-products', JSON.stringify(mappedProducts));
-        // Disparar evento personalizado para actualizar App.tsx
         window.dispatchEvent(new Event('products-updated'));
         toast.success(`${mappedProducts.length} productos cargados desde el servidor`, { id: 'loading-products' });
       } else {
-        // Si no hay productos en el servidor, usar productos de muestra
-        const sampleProducts = generateSampleProducts();
-        setProducts(sampleProducts);
-        setFilteredProducts(sampleProducts);
-        // Guardar en localStorage
-        localStorage.setItem('bizneai-products', JSON.stringify(sampleProducts));
-        window.dispatchEvent(new Event('products-updated'));
-        toast.success('No hay productos en el servidor. Mostrando productos de muestra', { id: 'loading-products' });
+        const local = loadFromLocalStorage();
+        let toUse = local.length > 0 ? local : generateSampleProducts();
+        toUse = await enrichProductsWithImages(toUse);
+        setProducts(toUse);
+        setFilteredProducts(toUse);
+        if (local.length === 0) {
+          localStorage.setItem('bizneai-products', JSON.stringify(toUse));
+          window.dispatchEvent(new Event('products-updated'));
+        }
+        toast.success(local.length > 0 ? 'Usando productos guardados localmente' : 'Mostrando productos de muestra', { id: 'loading-products' });
       }
     } catch (error) {
       console.error('Error loading products from server:', error);
-      toast.error('Error al cargar productos desde el servidor', { id: 'loading-products' });
-      // Fallback a productos de muestra
-      const sampleProducts = generateSampleProducts();
-      setProducts(sampleProducts);
-      setFilteredProducts(sampleProducts);
-      // Guardar en localStorage
-      localStorage.setItem('bizneai-products', JSON.stringify(sampleProducts));
-      window.dispatchEvent(new Event('products-updated'));
+      toast.error('Error al cargar desde el servidor. Mostrando datos locales.', { id: 'loading-products' });
+      const local = loadFromLocalStorage();
+      let toUse = local.length > 0 ? local : generateSampleProducts();
+      toUse = await enrichProductsWithImages(toUse);
+      setProducts(toUse);
+      setFilteredProducts(toUse);
+    } finally {
+      isLoadingRef.current = false;
     }
   };
 
   useEffect(() => {
-    if (isOpen) {
-      // Intentar cargar desde el servidor primero
-      if (isShopIdConfigured()) {
-        loadProductsFromServer();
-      } else {
-        // Si no hay shopId configurado, usar productos de muestra
+    if (isOpen && initialView) {
+      setView(initialView);
+    }
+  }, [isOpen, initialView]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      hasLoadedForOpenRef.current = false;
+      return;
+    }
+    // Evitar cargas duplicadas (ej. React Strict Mode)
+    if (hasLoadedForOpenRef.current) return;
+    hasLoadedForOpenRef.current = true;
+
+    // 1. Mostrar algo de inmediato desde localStorage
+    const local = loadFromLocalStorage();
+    if (local.length > 0) {
+      setProducts(local);
+      setFilteredProducts(local);
+      // Enriquecer imágenes en segundo plano (no solo al inicio de la app)
+      if (isShopIdConfigured() && local.some((p) => !p?.image || String(p.image).trim() === '')) {
+        enrichProductsWithImages(local).then((enriched) => {
+          if (!hasServerDataRef.current) {
+            setProducts(enriched);
+            setFilteredProducts(enriched);
+          }
+        });
+      }
+    }
+
+    // 2. Si hay servidor y sincronización pendiente (>24h), cargar en background. Si no, usar datos locales (standalone)
+    if (isShopIdConfigured() && isSyncDue()) {
+      loadProductsFromServer();
+    } else if (local.length === 0) {
       const sampleProducts = generateSampleProducts();
       setProducts(sampleProducts);
       setFilteredProducts(sampleProducts);
-      }
     }
   }, [isOpen]);
 
@@ -312,15 +364,22 @@ const ProductManagement = ({ isOpen, onClose }: ProductManagementProps) => {
     setIsEditModalOpen(true);
   };
 
+  const persistProducts = (updatedProducts: Product[]) => {
+    setProducts(updatedProducts);
+    localStorage.setItem('bizneai-products', JSON.stringify(updatedProducts));
+    window.dispatchEvent(new Event('products-updated'));
+  };
+
   const handleSaveProduct = () => {
     if (isAddModalOpen) {
       const newProduct: Product = {
         ...editingProduct as Product,
-        id: Math.max(...products.map(p => p.id)) + 1,
+        id: products.length > 0 ? Math.max(...products.map(p => p.id)) + 1 : 1,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
-      setProducts([...products, newProduct]);
+      const updatedProducts = [...products, newProduct];
+      persistProducts(updatedProducts);
       setIsAddModalOpen(false);
     } else if (isEditModalOpen && selectedProduct) {
       const updatedProducts = products.map(p =>
@@ -328,7 +387,7 @@ const ProductManagement = ({ isOpen, onClose }: ProductManagementProps) => {
           ? { ...editingProduct as Product, updatedAt: new Date().toISOString() }
           : p
       );
-      setProducts(updatedProducts);
+      persistProducts(updatedProducts);
       setIsEditModalOpen(false);
       setSelectedProduct(null);
     }
@@ -337,14 +396,21 @@ const ProductManagement = ({ isOpen, onClose }: ProductManagementProps) => {
 
   const handleDeleteProduct = (productId: number) => {
     if (confirm('¿Estás seguro de que quieres eliminar este producto?')) {
-      setProducts(products.filter(p => p.id !== productId));
+      const updatedProducts = products.filter(p => p.id !== productId);
+      setProducts(updatedProducts);
+      localStorage.setItem('bizneai-products', JSON.stringify(updatedProducts));
+      window.dispatchEvent(new Event('products-updated'));
     }
   };
 
   const handleStockUpdate = (productId: number, newStock: number) => {
-    setProducts(products.map(p =>
+    const updatedProducts = products.map(p =>
       p.id === productId ? { ...p, stock: newStock, updatedAt: new Date().toISOString() } : p
-    ));
+    );
+    setProducts(updatedProducts);
+    // Persistir para que el POS y el resto de la app vean el cambio
+    localStorage.setItem('bizneai-products', JSON.stringify(updatedProducts));
+    window.dispatchEvent(new Event('products-updated'));
   };
 
   const getStockStatus = (product: Product) => {
@@ -560,15 +626,20 @@ const ProductManagement = ({ isOpen, onClose }: ProductManagementProps) => {
                 <td>
                   <div className="product-info">
                     <div className="product-image">
-                      {product.image ? (
-                        <img src={product.image} alt={product.name} />
+                      {shouldShowImage(product.image) ? (
+                        <img
+                          src={product.image!}
+                          alt={product.name}
+                          onError={() => markImageFailed(product.image)}
+                          loading="lazy"
+                        />
                       ) : (
                         <Package size={24} />
                       )}
                     </div>
                     <div>
                       <div className="product-name">{product.name}</div>
-                      <div className="product-description">{product.description.substring(0, 50)}...</div>
+                      <div className="product-description">{(product.description || '').substring(0, 50)}...</div>
                     </div>
                   </div>
                 </td>
@@ -626,8 +697,13 @@ const ProductManagement = ({ isOpen, onClose }: ProductManagementProps) => {
           <div key={product.id} className="product-card">
             <div className="product-card-header">
               <div className="product-image">
-                {product.image ? (
-                  <img src={product.image} alt={product.name} />
+                {shouldShowImage(product.image) ? (
+                  <img
+                    src={product.image!}
+                    alt={product.name}
+                    onError={() => markImageFailed(product.image)}
+                    loading="lazy"
+                  />
                 ) : (
                   <Package size={32} />
                 )}
@@ -641,7 +717,7 @@ const ProductManagement = ({ isOpen, onClose }: ProductManagementProps) => {
             
             <div className="product-card-content">
               <h3 className="product-name">{product.name}</h3>
-              <p className="product-description">{product.description.substring(0, 80)}...</p>
+              <p className="product-description">{(product.description || '').substring(0, 80)}...</p>
               
               <div className="product-details">
                 <div className="detail-row">
@@ -693,7 +769,6 @@ const ProductManagement = ({ isOpen, onClose }: ProductManagementProps) => {
 
     const stockAlerts = products.filter(p => p.stock <= p.minStock);
     const outOfStock = products.filter(p => p.stock === 0);
-    const totalValue = products.reduce((sum, p) => sum + (p.stock * p.cost), 0);
 
     return (
       <div className="analytics-view">
@@ -725,16 +800,6 @@ const ProductManagement = ({ isOpen, onClose }: ProductManagementProps) => {
             <div className="stat-info">
               <h3>{outOfStock.length}</h3>
               <p>Sin Stock</p>
-            </div>
-          </div>
-          
-          <div className="stat-card">
-            <div className="stat-icon" style={{ background: '#059669' }}>
-              <DollarSign size={24} />
-            </div>
-            <div className="stat-info">
-              <h3>${totalValue.toFixed(2)}</h3>
-              <p>Valor Inventario</p>
             </div>
           </div>
         </div>
@@ -890,7 +955,14 @@ const ProductManagement = ({ isOpen, onClose }: ProductManagementProps) => {
           <div className="view-content">
             {view === 'list' && renderProductList()}
             {view === 'grid' && renderProductGrid()}
-            {view === 'inventory' && <InventoryManagement products={products} onStockUpdate={handleStockUpdate} />}
+            {view === 'inventory' && (
+              <InventoryManagement
+                products={products}
+                onStockUpdate={handleStockUpdate}
+                restockProduct={restockProduct ?? undefined}
+                onRestockComplete={onRestockComplete}
+              />
+            )}
             {view === 'analytics' && renderAnalytics()}
           </div>
         </div>

@@ -58,6 +58,7 @@ import { StoreConfig } from '../types/store';
 import { useStore } from '../contexts/StoreContext';
 import { getStoreTypes, checkStoreTypesForUpdates, getStoreTypeLabel } from '../data/storeTypes';
 import { mapMcpProductToLocal } from '../utils/shopIdHelper';
+import { setLastSyncTime, isSyncDue } from '../utils/syncService';
 
 interface SettingsProps {
   isSetupMode?: boolean;
@@ -258,8 +259,8 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
             mcpUrl: config.mcpUrl || null
           });
           
-          // Si hay MCP URL, intentar cargar datos del shop
-          if (config.mcpUrl) {
+          // Si hay MCP URL y sincronización pendiente (una vez al día), cargar datos del shop
+          if (config.mcpUrl && isSyncDue()) {
             await loadShopDataFromServer(config.mcpUrl);
           }
         }
@@ -351,6 +352,7 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
               mapMcpProductToLocal(product, index)
             );
             localStorage.setItem('bizneai-products', JSON.stringify(mappedProducts));
+            setLastSyncTime();
             window.dispatchEvent(new Event('products-updated'));
           }
 

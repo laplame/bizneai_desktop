@@ -31,6 +31,7 @@ import {
   ArrowUpDown
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
+import { shouldShowImage, markImageFailed } from '../utils/imageCache';
 
 interface Product {
   id: number;
@@ -72,13 +73,15 @@ interface InventoryMovement {
 interface InventoryManagementProps {
   products: Product[];
   onStockUpdate: (productId: number, newStock: number) => void;
+  restockProduct?: { id: number; name: string };
+  onRestockComplete?: (productToAdd?: Product) => void;
 }
 
 type StockStatus = 'in-stock' | 'low-stock' | 'out-of-stock';
 type SortField = 'name' | 'stock' | 'lastUpdated' | 'category';
 type SortDirection = 'asc' | 'desc';
 
-const InventoryManagement: React.FC<InventoryManagementProps> = ({ products, onStockUpdate }) => {
+const InventoryManagement: React.FC<InventoryManagementProps> = ({ products, onStockUpdate, restockProduct, onRestockComplete }) => {
   // State
   const [selectedProducts, setSelectedProducts] = useState<Set<number>>(new Set());
   const [searchTerm, setSearchTerm] = useState('');
@@ -112,6 +115,18 @@ const InventoryManagement: React.FC<InventoryManagementProps> = ({ products, onS
       }
     }
   }, []);
+
+  // Predefinir búsqueda y abrir modal Agregar Stock cuando viene del POS con producto específico
+  useEffect(() => {
+    if (!restockProduct || products.length === 0) return;
+    setSearchTerm(restockProduct.name);
+    const product = products.find(p => p.id === restockProduct.id);
+    if (product) {
+      setSelectedProduct(product);
+      setStockQuantity(0);
+      setShowAddStockModal(true);
+    }
+  }, [restockProduct, products]);
 
   // Save inventory history
   const saveInventoryHistory = (movement: InventoryMovement) => {
@@ -190,10 +205,9 @@ const InventoryManagement: React.FC<InventoryManagementProps> = ({ products, onS
     const inStock = products.filter(p => getStockStatus(p) === 'in-stock').length;
     const lowStock = products.filter(p => getStockStatus(p) === 'low-stock').length;
     const outOfStock = products.filter(p => getStockStatus(p) === 'out-of-stock').length;
-    const totalValue = products.reduce((sum, p) => sum + (p.stock * (p.cost || 0)), 0);
     const totalItems = products.reduce((sum, p) => sum + p.stock, 0);
 
-    return { inStock, lowStock, outOfStock, totalValue, totalItems };
+    return { inStock, lowStock, outOfStock, totalItems };
   }, [products]);
 
   // Handle add stock
@@ -205,6 +219,8 @@ const InventoryManagement: React.FC<InventoryManagementProps> = ({ products, onS
 
     const newStock = selectedProduct.stock + stockQuantity;
     onStockUpdate(selectedProduct.id, newStock);
+
+    const productWithNewStock = { ...selectedProduct, stock: newStock };
 
     const movement: InventoryMovement = {
       id: Date.now(),
@@ -223,6 +239,7 @@ const InventoryManagement: React.FC<InventoryManagementProps> = ({ products, onS
     setSelectedProduct(null);
     setStockQuantity(0);
     setStockNotes('');
+    onRestockComplete?.(productWithNewStock);
   };
 
   // Handle remove stock
@@ -421,16 +438,6 @@ const InventoryManagement: React.FC<InventoryManagementProps> = ({ products, onS
             <p>Total Unidades</p>
           </div>
         </div>
-
-        <div className="inventory-stat-card">
-          <div className="stat-icon" style={{ background: 'rgba(16, 185, 129, 0.1)', color: '#10b981' }}>
-            <DollarSign size={24} />
-          </div>
-          <div className="stat-content">
-            <h3>${stats.totalValue.toFixed(2)}</h3>
-            <p>Valor Total</p>
-          </div>
-        </div>
       </div>
 
       {/* Toolbar */}
@@ -565,9 +572,15 @@ const InventoryManagement: React.FC<InventoryManagementProps> = ({ products, onS
                     </td>
                     <td>
                       <div className="product-cell">
-                        {product.image && (
-                          <img src={product.image} alt={product.name} className="product-thumb" />
-                        )}
+                        {shouldShowImage(product.image) ? (
+                          <img
+                            src={product.image!}
+                            alt={product.name}
+                            className="product-thumb"
+                            onError={() => markImageFailed(product.image)}
+                            loading="lazy"
+                          />
+                        ) : null}
                         <div>
                           <div className="product-name">{product.name}</div>
                           {product.sku && (
@@ -739,6 +752,18 @@ const InventoryManagement: React.FC<InventoryManagementProps> = ({ products, onS
             <div className="modal-body">
               <div className="form-group">
                 <label>Cantidad a Agregar *</label>
+                <div className="quick-amounts">
+                  {[1, 5, 6, 12, 24, 50, 100].map((qty) => (
+                    <button
+                      key={qty}
+                      type="button"
+                      className={`quick-amount-btn ${stockQuantity === qty ? 'selected' : ''}`}
+                      onClick={() => setStockQuantity(qty)}
+                    >
+                      {qty}
+                    </button>
+                  ))}
+                </div>
                 <input
                   type="number"
                   min="1"
@@ -762,6 +787,18 @@ const InventoryManagement: React.FC<InventoryManagementProps> = ({ products, onS
               </div>
             </div>
             <div className="modal-footer">
+              {onRestockComplete && (
+                <button
+                  className="btn-secondary"
+                  onClick={() => {
+                    setShowAddStockModal(false);
+                    setSelectedProduct(null);
+                    onRestockComplete(undefined);
+                  }}
+                >
+                  Volver al punto de venta
+                </button>
+              )}
               <button className="btn-secondary" onClick={() => setShowAddStockModal(false)}>
                 Cancelar
               </button>

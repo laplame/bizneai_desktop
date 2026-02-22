@@ -73,6 +73,36 @@ npm install
 npm run dev
 ```
 
+### Ejecutar la aplicación Electron
+
+Hay varias formas de ejecutar la app como aplicación de escritorio:
+
+**Opción 1: Modo desarrollo completo (recomendado)**  
+Arranca el frontend (Vite), el backend y Electron en un solo comando:
+
+```bash
+npm run electron:dev
+```
+
+O alternativamente:
+
+```bash
+npm run start:all
+```
+
+**Opción 2: Solo Electron**  
+Si ya tienes la app construida o el servidor de Vite corriendo:
+
+```bash
+# Primero construye la app (si no está construida)
+npm run build
+
+# Luego ejecuta Electron
+npm run electron
+```
+
+Si ya tienes `npm run dev` corriendo en otra terminal, puedes ejecutar `npm run electron` directamente.
+
 ### Construir Instaladores
 
 #### macOS
@@ -99,6 +129,13 @@ npm run build            # Construir para producción
 npm run lint             # Ejecutar ESLint
 ```
 
+### Electron
+```bash
+npm run electron:dev     # Iniciar app Electron en modo desarrollo (recomendado)
+npm run start:all        # Alternativa: inicia dev + Electron
+npm run electron         # Ejecutar Electron (requiere build o dev corriendo)
+```
+
 ### Blockchain
 ```bash
 npm run blockchain:init  # Inicializar blockchain
@@ -113,6 +150,15 @@ npm run dist:mac         # Construir para macOS
 npm run dist:win         # Construir para Windows
 npm run dist:linux       # Construir para Linux
 ```
+
+## 📴 Modo Offline / Standalone
+
+El sistema está diseñado para funcionar **sin conexión** con datos persistentes:
+
+- **Datos locales**: Productos, configuración y ventas se guardan en localStorage.
+- **Sincronización**: Una vez al día (si hay conexión) se sincroniza con el servidor.
+- **Sin conexión**: Si no hay red, el sistema usa los datos descargados la primera vez.
+- **Sincronización manual**: En Configuración → "Sincronizar con Servidor" o "Cargar datos del Shop" para forzar una actualización.
 
 ## 🚀 Características Avanzadas
 

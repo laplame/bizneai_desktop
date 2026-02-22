@@ -25,7 +25,9 @@ import {
   RefreshCw
 } from 'lucide-react';
 import { toast, Toaster } from 'react-hot-toast';
-import { getProductsFromMcp, mapMcpProductToLocal, getShopDataFromMcp } from './utils/shopIdHelper';
+import { getProductsFromMcp, mapMcpProductToLocal, getShopDataFromMcp, enrichProductsWithImages, isShopIdConfigured } from './utils/shopIdHelper';
+import { maybeSyncIfDue, hasLocalData, setLastSyncTime } from './utils/syncService';
+import { createSale } from './api/sales';
 import BarcodeScanner from './components/BarcodeScanner';
 import CheckoutModal from './components/CheckoutModal';
 import SalesReports from './components/SalesReports';
@@ -35,15 +37,16 @@ import VirtualTicket from './components/VirtualTicket';
 import Settings from './components/Settings';
 import ProductUpload from './components/ProductUpload';
 import Navbar from './components/Navbar';
-import Cart from './components/Cart';
 import Waitlist from './components/Waitlist';
 import Taxes from './components/Taxes';
 import Kitchen from './components/Kitchen';
 import BizneAIChat from './components/BizneAIChat';
 import ComingSoon from './components/ComingSoon';
+import LiveClock from './components/LiveClock';
 import { storeAPI } from './api/store';
 import { waitlistAPI } from './api/waitlist';
 import { StoreProvider, useStore } from './contexts/StoreContext';
+import { shouldShowImage, markImageFailed } from './utils/imageCache';
 
 // Tipos de datos
 interface Product {
@@ -231,11 +234,12 @@ function App() {
   };
   const [isBarcodeScannerOpen, setIsBarcodeScannerOpen] = useState(false);
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
+  const [productManagementInitialView, setProductManagementInitialView] = useState<'list' | 'grid' | 'analytics' | 'inventory' | null>(null);
+  const [productManagementRestockProduct, setProductManagementRestockProduct] = useState<{ id: number; name: string } | null>(null);
   const [isReportsOpen, setIsReportsOpen] = useState(false);
   const [isProductManagementOpen, setIsProductManagementOpen] = useState(false);
   const [isCustomerManagementOpen, setIsCustomerManagementOpen] = useState(false);
   const [isVirtualTicketOpen, setIsVirtualTicketOpen] = useState(false);
-  const [isCartOpen, setIsCartOpen] = useState(false);
   const [isWaitlistOpen, setIsWaitlistOpen] = useState(false);
   const [isTaxesOpen, setIsTaxesOpen] = useState(false);
   const [isKitchenOpen, setIsKitchenOpen] = useState(false);
@@ -266,58 +270,59 @@ function App() {
   // Estado para el modal de carga de productos
   const [showProductUpload, setShowProductUpload] = useState(false);
 
-  // Cargar productos desde servidor o localStorage
+  // Cargar productos: modo standalone, datos persistentes. Siempre preferir local.
   const loadProducts = async () => {
-    try {
-      // Primero intentar cargar desde localStorage (productos sincronizados)
-      const savedProducts = localStorage.getItem('bizneai-products');
-      if (savedProducts) {
-        try {
-          const parsedProducts = JSON.parse(savedProducts);
-          if (parsedProducts && parsedProducts.length > 0) {
-            const hydratedLocalProducts = hydrateProductsForPos(parsedProducts);
-            setProducts(hydratedLocalProducts);
-            // Extraer categorías dinámicamente
-            setCategories(extractCategories(hydratedLocalProducts));
+    // 1. Cargar desde localStorage (persistente, funciona sin conexión)
+    const savedProducts = localStorage.getItem('bizneai-products');
+    if (savedProducts) {
+      try {
+        const parsedProducts = JSON.parse(savedProducts);
+        if (parsedProducts && parsedProducts.length > 0) {
+          const hydratedLocalProducts = hydrateProductsForPos(parsedProducts);
+          setProducts(hydratedLocalProducts);
+          setCategories(extractCategories(hydratedLocalProducts));
 
-            const hasAnyImage = hydratedLocalProducts.some((product) => Boolean(product.image));
-            const isSampleCatalog = looksLikeSampleCatalog(hydratedLocalProducts);
-            if ((hasAnyImage && !isSampleCatalog)) {
-              return;
+          const hasAnyImage = hydratedLocalProducts.some((product) => Boolean(product.image));
+          const isSampleCatalog = looksLikeSampleCatalog(hydratedLocalProducts);
+          if (hasAnyImage && !isSampleCatalog) {
+            if (isShopIdConfigured() && hydratedLocalProducts.some((p) => !p?.image || String(p.image).trim() === '')) {
+              enrichProductsWithImages(hydratedLocalProducts).then((enriched) => {
+                setProducts(enriched);
+                setCategories(extractCategories(enriched));
+                localStorage.setItem('bizneai-products', JSON.stringify(enriched));
+              });
             }
           }
-        } catch (error) {
-          console.warn('Error parsing saved products:', error);
+        }
+      } catch (error) {
+        console.warn('Error parsing saved products:', error);
+      }
+    }
+
+    // 2. Si no hay datos locales, mostrar muestra y intentar primera carga en background
+    if (!hasLocalData()) {
+      setProducts(sampleProducts);
+      setCategories(extractCategories(sampleProducts));
+
+      if (isShopIdConfigured()) {
+        try {
+          const mcpProducts = await getProductsFromMcp();
+          if (mcpProducts && mcpProducts.length > 0) {
+            const mappedProducts = mcpProducts.map((p: any, index: number) => mapMcpProductToLocal(p, index));
+            const hydrated = hydrateProductsForPos(mappedProducts);
+            setProducts(hydrated);
+            setCategories(extractCategories(hydrated));
+            localStorage.setItem('bizneai-products', JSON.stringify(hydrated));
+            setLastSyncTime();
+          }
+        } catch (e) {
+          console.warn('Primera carga falló (sin conexión?):', e);
         }
       }
-
-      // 1) Intentar carga directa con la mcpUrl configurada en Settings
-      let mcpProducts = await fetchProductsFromConfiguredMcp();
-
-      // 2) Fallback al helper global
-      if (!mcpProducts || mcpProducts.length === 0) {
-        mcpProducts = await getProductsFromMcp();
-      }
-
-      if (mcpProducts && mcpProducts.length > 0) {
-        const mappedProducts = mcpProducts.map((p: any, index: number) => mapMcpProductToLocal(p, index));
-        const hydratedMappedProducts = hydrateProductsForPos(mappedProducts);
-        setProducts(hydratedMappedProducts);
-        // Extraer categorías dinámicamente desde el MCP
-        setCategories(extractCategories(hydratedMappedProducts));
-        // Guardar en localStorage para sincronización
-        localStorage.setItem('bizneai-products', JSON.stringify(hydratedMappedProducts));
-        return;
-      }
-
-      // Fallback a productos de muestra
-      setProducts(sampleProducts);
-      setCategories(extractCategories(sampleProducts));
-    } catch (error) {
-      console.error('Error loading products:', error);
-      setProducts(sampleProducts);
-      setCategories(extractCategories(sampleProducts));
     }
+
+    // 3. Sincronización en background (una vez al día). products-updated actualiza la UI.
+    maybeSyncIfDue();
   };
 
   // Cargar contadores de pedidos al iniciar
@@ -548,11 +553,41 @@ function App() {
     }));
   };
 
+  // Toast con acción para ir a inventario cuando hay stock insuficiente
+  const showStockInsufficientToast = (available: number, unit = '', product?: Product) => {
+    toast(
+      (t) => (
+        <span style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+          <span>Stock insuficiente. Disponible: {available}{unit}</span>
+          <button
+            onClick={() => {
+              toast.dismiss(t.id);
+              openInventoryForRestock(product);
+            }}
+            style={{
+              padding: '0.35rem 0.75rem',
+              background: '#3b82f6',
+              color: 'white',
+              border: 'none',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              fontWeight: 600,
+              fontSize: '0.875rem'
+            }}
+          >
+            Ir a inventario
+          </button>
+        </span>
+      ),
+      { duration: 6000 }
+    );
+  };
+
   // Agregar producto al carrito
   const addToCart = (product: Product, quantity: number = 1, weight?: number, variants?: { [key: string]: string }) => {
     // Validar inventario
     if (!product.isWeightBased && quantity > product.stock) {
-      toast.error(`Stock insuficiente. Disponible: ${product.stock}`);
+      showStockInsufficientToast(product.stock, '', product);
       return;
     }
     
@@ -581,7 +616,7 @@ function App() {
               : item.quantity + quantity;
             
             if (!product.isWeightBased && newQuantity > product.stock) {
-              toast.error(`Stock insuficiente. Disponible: ${product.stock}`);
+              showStockInsufficientToast(product.stock, '', product);
               return item;
             }
             
@@ -626,12 +661,12 @@ function App() {
           const finalWeight = product.isWeightBased ? (weight || newQuantity) : item.weight;
           
           if (!product.isWeightBased && newQuantity > product.stock) {
-            toast.error(`Stock insuficiente. Disponible: ${product.stock}`);
+            showStockInsufficientToast(product.stock, '', product);
             return item;
           }
           
           if (product.isWeightBased && finalWeight && finalWeight > product.stock) {
-            toast.error(`Stock insuficiente. Disponible: ${product.stock}kg`);
+            showStockInsufficientToast(product.stock, 'kg', product);
             return item;
           }
           
@@ -665,38 +700,6 @@ function App() {
     localStorage.removeItem('bizneai-cart-customer');
     localStorage.removeItem('bizneai-cart-notes');
     toast.success('Carrito limpiado');
-  };
-
-  // Handler para checkout desde Cart
-  const handleCartCheckout = async (checkoutType: 'pay-now' | 'waitlist' | 'kitchen') => {
-    if (cart.length === 0) {
-      toast.error('El carrito está vacío');
-      return;
-    }
-
-    setIsProcessing(true);
-
-    try {
-      if (checkoutType === 'pay-now') {
-        setIsCheckoutOpen(true);
-        setIsCartOpen(false);
-      } else if (checkoutType === 'waitlist') {
-        // Agregar a waitlist
-        toast.success('Orden agregada a la lista de espera');
-        clearCart();
-        setIsCartOpen(false);
-      } else if (checkoutType === 'kitchen') {
-        // Enviar a cocina
-        toast.success('Orden enviada a cocina');
-        clearCart();
-        setIsCartOpen(false);
-      }
-    } catch (error) {
-      toast.error('Error al procesar la orden');
-      console.error(error);
-    } finally {
-      setIsProcessing(false);
-    }
   };
 
   // Agregar carrito al waitlist
@@ -797,35 +800,59 @@ function App() {
     setIsCheckoutOpen(true);
   };
 
-  // Manejar completar checkout
-  const handleCheckoutComplete = (paymentMethod: string, amount: number, change?: number) => {
+  // Manejar completar checkout (crea venta en API según Sales Sync Model)
+  const handleCheckoutComplete = async (paymentMethod: string, amount: number, change?: number) => {
     const saleId = `TKT-${Math.floor(Math.random() * 100000) + 10000}`;
-    const saleData = {
-      id: Math.floor(Math.random() * 10000) + 1000,
-      date: new Date().toISOString(),
-      items: cart,
-      total: amount,
-      paymentMethod,
-      change: change || 0
-    };
-    
-    // Guardar datos de la venta para el ticket
+    const subtotal = cart.reduce((sum, item) => sum + item.itemTotal, 0);
+    const tax = subtotal * 0.16;
+    const discount = 0;
+
     setLastSaleData({
       saleId,
       paymentMethod,
       change,
-      customerInfo: {
-        name: 'Cliente General',
-        email: 'cliente@email.com',
-        phone: '+52 55 0000 0000'
-      }
+      customerInfo: customerInfo?.name || customerInfo?.email || customerInfo?.phone
+        ? { name: customerInfo.name || '', email: customerInfo.email || '', phone: customerInfo.phone || '' }
+        : { name: 'Cliente General', email: 'cliente@email.com', phone: '+52 55 0000 0000' }
     });
-    
-    console.log('Venta completada:', saleData);
-    
-    // Aquí podrías guardar la venta en una base de datos
-    alert(`Venta #${saleId} completada exitosamente por $${amount.toFixed(2)} usando ${paymentMethod}`);
-    
+
+    const apiPayload = {
+      customerName: customerInfo?.name,
+      customerPhone: customerInfo?.phone,
+      customerEmail: customerInfo?.email,
+      tableNumber: customerInfo?.tableNumber,
+      items: cart.map((item) => ({
+        productId: String(item.product.id),
+        productName: item.product.name,
+        quantity: item.product.isWeightBased ? (item.weight ?? item.quantity) : item.quantity,
+        unitPrice: item.unitPrice,
+        totalPrice: item.itemTotal,
+        category: item.product.category
+      })),
+      subtotal,
+      tax,
+      discount,
+      total: amount,
+      paymentMethod,
+      paymentStatus: 'completed' as const,
+      transactionType: 'sale' as const,
+      orderType: 'dine-in' as const,
+      source: 'local' as const,
+      status: 'active' as const,
+      notes: orderNotes || undefined
+    };
+
+    const result = await createSale(apiPayload);
+
+    if (result.success) {
+      toast.success(`Venta #${saleId} completada por $${amount.toFixed(2)} (sincronizada)`);
+    } else {
+      toast.success(`Venta #${saleId} completada por $${amount.toFixed(2)}`);
+      if (result.error) {
+        console.warn('Venta guardada localmente, sync pendiente:', result.error);
+      }
+    }
+
     clearCart();
     setSearchTerm('');
   };
@@ -839,17 +866,30 @@ function App() {
     setIsVirtualTicketOpen(true);
   };
 
+  // Redirigir a inventario para agregar stock rápido (desde POS cuando hay stock insuficiente)
+  const openInventoryForRestock = (product?: Product) => {
+    setActiveSection('products');
+    setProductManagementInitialView('inventory');
+    setProductManagementRestockProduct(product ? { id: product.id, name: product.name } : null);
+    setIsProductManagementOpen(true);
+  };
+
   const handleSectionChange = (section: 'pos' | 'cart' | 'products' | 'reports' | 'customers' | 'waitlist' | 'taxes' | 'kitchen' | 'chat' | 'coming-soon' | 'settings') => {
     setActiveSection(section);
+    if (section !== 'products') {
+      setIsProductManagementOpen(false);
+    }
     if (section === 'reports') {
       setIsReportsOpen(true);
     } else if (section === 'products') {
+      setProductManagementInitialView(null);
+      setProductManagementRestockProduct(null);
       setIsProductManagementOpen(true);
     } else if (section === 'customers') {
       setIsCustomerManagementOpen(true);
     } else if (section === 'cart') {
-      setIsCartOpen(true);
-      // No cambiar activeSection para mantener la vista POS visible
+      // Unificar con POS: Carrito navega a la misma vista que Punto de venta
+      setActiveSection('pos');
     } else if (section === 'waitlist') {
       setIsWaitlistOpen(true);
     } else if (section === 'taxes') {
@@ -931,9 +971,9 @@ function App() {
       setOrderNotes(entry.notes);
     }
     
-    // Cerrar waitlist y abrir carrito
+    // Cerrar waitlist y navegar al POS con el carrito cargado
     setIsWaitlistOpen(false);
-    setIsCartOpen(true);
+    setActiveSection('pos');
     
     toast.success(`Orden de ${entry.name || 'cliente'} cargada al carrito (${entry.items.length} items)`);
   };
@@ -1037,6 +1077,14 @@ function App() {
             </div>
           </div>
 
+          {/* Fecha y hora */}
+          <div className="sidebar-date-time">
+            <span className="sidebar-date">{new Date().toLocaleDateString()}</span>
+            <span className="sidebar-time">
+              <LiveClock />
+            </span>
+          </div>
+
           {/* Punto de venta */}
           <div className="sidebar-section">
             <div 
@@ -1048,11 +1096,12 @@ function App() {
             </div>
           </div>
 
-          {/* Carrito */}
+          {/* Carrito - unificado con POS, navega a la misma vista */}
           <div className="sidebar-section">
             <div 
-              className={`sidebar-item ${activeSection === 'cart' ? 'active' : ''}`}
+              className={`sidebar-item ${activeSection === 'pos' ? 'active' : ''}`}
               onClick={() => handleSectionChange('cart')}
+              title="Ir al punto de venta con el carrito"
             >
               <ShoppingBag size={20} />
               Carrito
@@ -1246,52 +1295,53 @@ function App() {
                         <small>Try adjusting your search or category filter</small>
                       </div>
                     ) : (
-                      filteredProducts.map(product => {
-                        // Componente interno para manejar el estado de carga de imagen
-                        const ProductCard = ({ product }: { product: Product }) => {
-                          const [imageError, setImageError] = useState(false);
-                          
-                          // Reset image error when product image changes after sync
-                          useEffect(() => {
-                            setImageError(false);
-                          }, [product.image]);
-
-                          return (
+                      filteredProducts.map((product) => (
+                        <div
+                          key={product.id}
+                          className="product-card"
+                          onClick={() => {
+                            if (product.stock === 0) {
+                              openInventoryForRestock(product);
+                            } else {
+                              addToCart(product);
+                            }
+                          }}
+                          title={product.stock === 0 ? 'Sin stock - Ir a inventario para agregar' : `Click to add ${product.name} to cart`}
+                        >
+                          <div className="product-image">
+                            {shouldShowImage(product.image) ? (
+                              <img
+                                src={product.image!}
+                                alt={product.name}
+                                onError={() => markImageFailed(product.image)}
+                                loading="lazy"
+                              />
+                            ) : (
+                              <Package size={32} />
+                            )}
+                          </div>
+                          <div className="product-name">{product.name}</div>
+                          <div className="product-price">${product.price.toFixed(2)}</div>
+                          {product.stock !== undefined && product.stock < 10 && product.stock > 0 && (
                             <div
-                        className="product-card"
-                              onClick={() => {
-                                // According to Gherkin: "When I tap on a product"
-                                addToCart(product);
-                              }}
-                              title={`Click to add ${product.name} to cart`}
-                      >
-                        <div className="product-image">
-                                {Boolean(product.image) && !imageError ? (
-                                  <img 
-                                    src={product.image} 
-                                    alt={product.name}
-                                    onError={() => {
-                                      setImageError(true);
-                                    }}
-                                  />
-                          ) : (
-                            <Package size={32} />
+                              className="product-stock-warning product-stock-action"
+                              onClick={(e) => { e.stopPropagation(); openInventoryForRestock(product); }}
+                              title="Agregar stock rápidamente"
+                            >
+                              Stock bajo: {product.stock}
+                            </div>
+                          )}
+                          {product.stock === 0 && (
+                            <div
+                              className="product-stock-out product-stock-action"
+                              onClick={(e) => { e.stopPropagation(); openInventoryForRestock(product); }}
+                              title="Ir a inventario para agregar stock"
+                            >
+                              Sin stock
+                            </div>
                           )}
                         </div>
-                        <div className="product-name">{product.name}</div>
-                        <div className="product-price">${product.price.toFixed(2)}</div>
-                              {product.stock !== undefined && product.stock < 10 && product.stock > 0 && (
-                                <div className="product-stock-warning">Low Stock: {product.stock}</div>
-                              )}
-                              {product.stock === 0 && (
-                                <div className="product-stock-out">Out of Stock</div>
-                        )}
-                      </div>
-                          );
-                        };
-
-                        return <ProductCard key={product.id} product={product} />;
-                      })
+                      ))
                     )}
                   </div>
                 </div>
@@ -1304,9 +1354,6 @@ function App() {
                       {cart.length > 0 && (
                         <span className="cart-count-badge">{cart.reduce((sum, item) => sum + item.quantity, 0)}</span>
                       )}
-                    </div>
-                    <div className="cart-header-right">
-                      <span className="cart-date">{new Date().toLocaleDateString()}</span>
                     </div>
                   </div>
                   <div className="cart-items">
@@ -1490,46 +1537,31 @@ function App() {
           onClose={() => setIsReportsOpen(false)}
         />
 
-        {/* Cart Modal */}
-        {isCartOpen && (
-          <div className="modal-overlay" onClick={() => {
-            setIsCartOpen(false);
-            setActiveSection('pos');
-          }}>
-            <div className="modal-content large" onClick={(e) => e.stopPropagation()} style={{ maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}>
-              <div className="modal-header">
-                <h2>Carrito de Compras</h2>
-                <button className="close-btn" onClick={() => {
-                  setIsCartOpen(false);
-                  setActiveSection('pos');
-                }}>
-                  <X size={20} />
-                </button>
-              </div>
-              <div className="modal-body" style={{ padding: 0, flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-                <Cart
-                  items={cart}
-                  onUpdateQuantity={updateCartQuantity}
-                  onRemoveItem={removeCartItem}
-                  onClearCart={clearCart}
-                  onCheckout={handleCartCheckout}
-                  taxRate={0.16}
-                  onAddCustomerInfo={setCustomerInfo}
-                  onAddOrderNotes={setOrderNotes}
-                  customerInfo={customerInfo}
-                  orderNotes={orderNotes}
-                  isProcessing={isProcessing}
-                />
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Product Management Modal */}
+        {/* Product Management Modal - solo visible en sección Productos e Inventario */}
         {activeSection === 'products' && (
           <ProductManagement
             isOpen={isProductManagementOpen}
-            onClose={() => setIsProductManagementOpen(false)}
+            onClose={() => {
+              setIsProductManagementOpen(false);
+              setProductManagementInitialView(null);
+              setProductManagementRestockProduct(null);
+              setActiveSection('pos');
+            }}
+            initialView={productManagementInitialView ?? undefined}
+            restockProduct={productManagementRestockProduct}
+            onRestockComplete={
+              productManagementRestockProduct
+                ? (productToAdd) => {
+                    setIsProductManagementOpen(false);
+                    setProductManagementInitialView(null);
+                    setProductManagementRestockProduct(null);
+                    setActiveSection('pos');
+                    if (productToAdd) {
+                      addToCart(productToAdd as Product, 1);
+                    }
+                  }
+                : undefined
+            }
           />
         )}
 

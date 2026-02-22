@@ -352,6 +352,43 @@ const enrichProductImageFromSources = (mcpProduct: any, shopIndex: Map<string, a
 };
 
 /**
+ * Enrich products (e.g. from localStorage) with images from the Shop API.
+ * Only updates products that don't have an image. Call this when displaying
+ * the product list to ensure images are loaded even if they weren't at app init.
+ */
+export const enrichProductsWithImages = async (products: any[]): Promise<any[]> => {
+  const shopId = getShopId();
+  if (!shopId || !products?.length) return products;
+
+  const needsImage = products.filter((p) => !p?.image || String(p.image).trim() === '');
+  if (needsImage.length === 0) return products;
+
+  try {
+    const shopProducts = await getProductsFromShopApi(shopId);
+    const shopIndex = buildShopProductIndex(shopProducts);
+
+    return products.map((product) => {
+      if (product?.image && String(product.image).trim() !== '') return product;
+
+      const mcpLike = {
+        _id: product.id,
+        sku: product.sku,
+        name: product.name
+      };
+      const shopMatch = findShopProductMatch(mcpLike, shopIndex);
+      const imageUrl = shopMatch ? resolveBestImageUrl(shopMatch) : null;
+      if (imageUrl) {
+        return { ...product, image: imageUrl };
+      }
+      return product;
+    });
+  } catch (error) {
+    console.warn('Could not enrich product images:', error);
+    return products;
+  }
+};
+
+/**
  * Map MCP transaction to local Sale format
  */
 export const mapMcpTransactionToSale = (mcpTransaction: any, index: number = 0): any => {
