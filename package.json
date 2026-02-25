@@ -150,6 +150,7 @@
     ],
     "nodeGypRebuild": false,
     "buildDependenciesFromSource": false,
+    "npmRebuild": false,
     "mac": {
       "category": "public.app-category.productivity",
       "target": [

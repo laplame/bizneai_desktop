@@ -115,10 +115,28 @@ npm run dist:mac
 npm run dist:win
 ```
 
+> **Nota para usuarios de macOS:** El build de Windows desde Mac puede fallar por módulos nativos. Usa [GitHub Actions](#-build-automático-con-github-actions) para generar el instalador de Windows automáticamente.
+
 #### Linux
 ```bash
 npm run dist:linux
 ```
+
+### 🤖 Build automático con GitHub Actions
+
+El proyecto incluye un workflow de CI que genera el instalador de Windows automáticamente. Es la forma recomendada de obtener un build funcional para PC si desarrollas en macOS o Linux.
+
+**¿Cuándo se ejecuta?**
+- En cada push a `main` o `master`
+- En cada Pull Request hacia `main` o `master`
+- Manualmente desde la pestaña **Actions** del repositorio
+
+**Cómo descargar el build:**
+1. Ve a la pestaña **Actions** en GitHub
+2. Selecciona el workflow **Build Windows (PC)**
+3. Abre la ejecución más reciente (o la que quieras)
+4. En la sección **Artifacts** descarga **BizneAI-POS-Windows**
+5. Descomprime el archivo y ejecuta `BizneAI POS.exe` dentro de `win-unpacked/` o usa el instalador `.exe` (NSIS)
 
 ## 🔧 Scripts Disponibles
 
@@ -147,7 +165,7 @@ npm run blockchain:api   # Iniciar API blockchain
 ```bash
 npm run fix-deps         # Reparar dependencias
 npm run dist:mac         # Construir para macOS
-npm run dist:win         # Construir para Windows
+npm run dist:win         # Construir para Windows (o usar GitHub Actions)
 npm run dist:linux       # Construir para Linux
 ```
 
@@ -215,6 +233,9 @@ rm -rf node_modules package-lock.json
 npm install
 npm run fix-deps
 ```
+
+### Build de Windows desde macOS
+Si `npm run dist:win` falla con errores de módulos nativos (better-sqlite3, node-gyp), es porque la compilación cruzada no está soportada. **Solución:** usa el workflow de GitHub Actions (ver [Build automático](#-build-automático-con-github-actions) arriba) para generar el instalador de Windows en un runner nativo.
 
 ## 📚 Documentación
 
