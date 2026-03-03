@@ -1,5 +1,7 @@
 import fs from 'fs';
 import path from 'path';
+import Jimp from 'jimp';
+import pngToIco from 'png-to-ico';
 
 // Create a simple SVG icon
 const svgIcon = `
@@ -28,45 +30,54 @@ if (!fs.existsSync(buildDir)) {
 // Write SVG icon
 fs.writeFileSync(path.join(buildDir, 'icon.svg'), svgIcon);
 
-// Create a simple PNG icon (base64 encoded minimal PNG)
-const pngIcon = Buffer.from(`
-iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==
-`, 'base64');
+async function generateIcons() {
+  // Create 256x256 PNG with Jimp (gradient purple + white shapes)
+  const size = 256;
+  const image = new Jimp(size, size);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const r = Math.floor(102 + (118 - 102) * (x / size));
+      const g = Math.floor(126 + (75 - 126) * (x / size));
+      const b = Math.floor(234 + (162 - 234) * (x / size));
+      image.setPixelColor(Jimp.rgbaToInt(r, g, b, 255), x, y);
+    }
+  }
+  // Draw white circle
+  const cx = size / 2;
+  const cy = size * 0.4;
+  const radius = 30;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const dist = Math.sqrt((x - cx) ** 2 + (y - cy) ** 2);
+      if (dist < radius) {
+        image.setPixelColor(Jimp.rgbaToInt(255, 255, 255, 230), x, y);
+      }
+    }
+  }
+  const pngBuffer = await image.getBufferAsync(Jimp.MIME_PNG);
+  const pngPath = path.join(buildDir, 'icon.png');
+  fs.writeFileSync(pngPath, pngBuffer);
 
-fs.writeFileSync(path.join(buildDir, 'icon.png'), pngIcon);
+  // Create valid ICO using png-to-ico (accepts file path)
+  const icoBuffer = await pngToIco(pngPath);
+  fs.writeFileSync(path.join(buildDir, 'icon.ico'), icoBuffer);
 
-// Create a simple ICO file (minimal ICO format)
-const icoHeader = Buffer.from([
-  0x00, 0x00, // Reserved
-  0x01, 0x00, // Type (1 = ICO)
-  0x01, 0x00, // Number of images
-  0x10, 0x00, // Width (16)
-  0x10, 0x00, // Height (16)
-  0x00,       // Color count
-  0x00,       // Reserved
-  0x01, 0x00, // Color planes
-  0x20, 0x00, // Bits per pixel
-  0x40, 0x00, 0x00, 0x00, // Size of image data
-  0x16, 0x00, 0x00, 0x00  // Offset to image data
-]);
+  // ICNS: keep minimal format for macOS (electron-builder may handle it)
+  const icnsHeader = Buffer.from([
+    0x69, 0x63, 0x6e, 0x73, 0x00, 0x00, 0x00, 0x20,
+    0x69, 0x63, 0x6f, 0x6e, 0x00, 0x00, 0x00, 0x18
+  ]);
+  fs.writeFileSync(path.join(buildDir, 'icon.icns'), Buffer.concat([icnsHeader, pngBuffer.slice(0, 8)]));
 
-const icoData = Buffer.concat([icoHeader, pngIcon]);
-fs.writeFileSync(path.join(buildDir, 'icon.ico'), icoData);
+  console.log('✅ Icons generated successfully in build/ directory');
+  console.log('📁 Files created:');
+  console.log('  - icon.svg (vector format)');
+  console.log('  - icon.png (PNG format)');
+  console.log('  - icon.ico (Windows ICO format)');
+  console.log('  - icon.icns (macOS ICNS format)');
+}
 
-// Create a simple ICNS file (minimal ICNS format)
-const icnsHeader = Buffer.from([
-  0x69, 0x63, 0x6e, 0x73, // 'icns'
-  0x00, 0x00, 0x00, 0x20, // Size
-  0x69, 0x63, 0x6f, 0x6e, // 'icon'
-  0x00, 0x00, 0x00, 0x18  // Size
-]);
-
-const icnsData = Buffer.concat([icnsHeader, pngIcon]);
-fs.writeFileSync(path.join(buildDir, 'icon.icns'), icnsData);
-
-console.log('✅ Icons generated successfully in build/ directory');
-console.log('📁 Files created:');
-console.log('  - icon.svg (vector format)');
-console.log('  - icon.png (PNG format)');
-console.log('  - icon.ico (Windows ICO format)');
-console.log('  - icon.icns (macOS ICNS format)'); 
+generateIcons().catch((err) => {
+  console.error('❌ Failed to generate icons:', err);
+  process.exit(1);
+}); 

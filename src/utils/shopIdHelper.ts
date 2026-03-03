@@ -37,40 +37,53 @@ export const getShopId = (): string | null => {
   }
 };
 
+/** Detecta si estamos en localhost (dev) para usar proxy y evitar CORS */
+const isLocalhostOrigin = (): boolean => {
+  if (typeof window === 'undefined') return false;
+  const o = window.location?.origin || '';
+  return o.includes('localhost') || o.includes('127.0.0.1');
+};
+
+const MCP_PROXY_BASE = 'http://localhost:3000/api/proxy';
+
 /**
- * Get the MCP URL from localStorage or build it from shopId
+ * Get the MCP URL from localStorage or build it from shopId.
+ * En dev (localhost) usa proxy local para evitar CORS.
  * @returns MCP URL string or null if shopId not found
  */
 export const getMcpUrl = (): string | null => {
   try {
+    const shopId = getShopId();
+    if (!shopId) return null;
+
+    if (isLocalhostOrigin()) {
+      return `${MCP_PROXY_BASE}/mcp/${shopId}`;
+    }
+
     const serverConfig = localStorage.getItem('bizneai-server-config');
     if (serverConfig) {
       const config = JSON.parse(serverConfig);
       if (config.mcpUrl) {
         return config.mcpUrl;
       }
-      // Build MCP URL from shopId if available
       if (config.shopId) {
-        const baseUrl = config.serverUrl 
-          ? new URL(config.serverUrl).origin 
+        const baseUrl = config.serverUrl
+          ? new URL(config.serverUrl).origin
           : 'https://www.bizneai.com';
         return `${baseUrl}/api/mcp/${config.shopId}`;
       }
     }
-    
-    // Fallback: build from store identifiers
+
     const storeIdentifiers = localStorage.getItem('bizneai-store-identifiers');
     if (storeIdentifiers) {
       const identifiers = JSON.parse(storeIdentifiers);
-      if (identifiers.mcpUrl) {
-        return identifiers.mcpUrl;
-      }
+      if (identifiers.mcpUrl) return identifiers.mcpUrl;
       if (identifiers.shopId) {
         return `https://www.bizneai.com/api/mcp/${identifiers.shopId}`;
       }
     }
-    
-    return null;
+
+    return `https://www.bizneai.com/api/mcp/${shopId}`;
   } catch (error) {
     console.error('Error getting MCP URL:', error);
     return null;
@@ -107,6 +120,37 @@ export const getShopDataFromMcp = async (): Promise<any | null> => {
     console.error('Error fetching shop data from MCP:', error);
     return null;
   }
+};
+
+/**
+ * Sincroniza kitchenEnabled desde MCP a bizneai-store-config.
+ * Llama al arranque cuando hay shopId configurado para que el menú Cocina se muestre.
+ */
+export const syncKitchenEnabledFromMcp = (): void => {
+  const mcpUrl = getMcpUrl();
+  if (!mcpUrl) return;
+  getShopDataFromMcp().then((payload) => {
+    if (!payload) return;
+    const shop = payload.shop || payload.data?.shop || payload;
+    const enabled = shop?.kitchenEnabled ?? payload.kitchen?.enabled;
+    if (enabled === undefined) return;
+    const kitchenOn = !!enabled;
+    try {
+      const existing = localStorage.getItem('bizneai-store-config');
+      const config = existing ? JSON.parse(existing) : {};
+      config.kitchenEnabled = kitchenOn;
+      localStorage.setItem('bizneai-store-config', JSON.stringify(config));
+      const serverRaw = localStorage.getItem('bizneai-server-config');
+      if (serverRaw) {
+        const server = JSON.parse(serverRaw);
+        server.kitchenEnabled = kitchenOn;
+        localStorage.setItem('bizneai-server-config', JSON.stringify(server));
+      }
+      window.dispatchEvent(new Event('store-config-updated'));
+    } catch (e) {
+      console.warn('Could not sync kitchenEnabled from MCP:', e);
+    }
+  });
 };
 
 /**
@@ -214,7 +258,11 @@ export const mapMcpProductToLocal = (mcpProduct: any, index: number = 0): any =>
     image: resolveBestImageUrl(mcpProduct) || '',
     tags: [],
     createdAt: mcpProduct.createdAt || new Date().toISOString(),
-    updatedAt: mcpProduct.updatedAt || new Date().toISOString()
+    updatedAt: mcpProduct.updatedAt || new Date().toISOString(),
+    hasVariants: !!mcpProduct.hasVariants,
+    variantGroups: mcpProduct.variantGroups || undefined,
+    primaryVariantGroup: mcpProduct.primaryVariantGroup || undefined,
+    isWeightBased: !!mcpProduct.isWeightBased
   };
 };
 

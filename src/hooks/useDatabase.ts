@@ -129,11 +129,8 @@ export const useDatabase = (): DatabaseOperations => {
   // Función helper para hacer peticiones a la API
   // NOTA: Esta aplicación usa base de datos local (SQLite), no API
   // Esta función se mantiene para compatibilidad pero no hace peticiones reales
-  const makeRequest = useCallback(async (endpoint: string, options: RequestInit = {}): Promise<any> => {
-    // La aplicación usa base de datos local, no API
-    // Retornar array vacío o null según el caso
-    console.warn(`useDatabase: makeRequest called for ${endpoint} but using local database instead`);
-    
+  const makeRequest = useCallback(async (endpoint: string, _options: RequestInit = {}): Promise<any> => {
+    // La aplicación usa base de datos local, no API - comportamiento esperado, sin warning
     // Para transacciones y bloques, retornar arrays vacíos
     if (endpoint.includes('transactions') || endpoint.includes('blocks')) {
       return [];

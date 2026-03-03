@@ -124,19 +124,30 @@ npm run dist:linux
 
 ### 🤖 Build automático con GitHub Actions
 
-El proyecto incluye un workflow de CI que genera el instalador de Windows automáticamente. Es la forma recomendada de obtener un build funcional para PC si desarrollas en macOS o Linux.
+El proyecto incluye workflows de CI que generan instaladores automáticamente:
+- **Build Windows (PC)** — para Windows
+- **Build Linux** — para Linux (AppImage y .deb)
 
-**¿Cuándo se ejecuta?**
+**¿Cuándo se ejecutan?**
 - En cada push a `main` o `master`
 - En cada Pull Request hacia `main` o `master`
 - Manualmente desde la pestaña **Actions** del repositorio
 
-**Cómo descargar el build:**
+**Cómo descargar el build de Windows:**
 1. Ve a la pestaña **Actions** en GitHub
 2. Selecciona el workflow **Build Windows (PC)**
 3. Abre la ejecución más reciente (o la que quieras)
 4. En la sección **Artifacts** descarga **BizneAI-POS-Windows**
 5. Descomprime el archivo y ejecuta `BizneAI POS.exe` dentro de `win-unpacked/` o usa el instalador `.exe` (NSIS)
+
+**Cómo descargar el build de Linux:**
+1. Ve a la pestaña **Actions** en GitHub
+2. Selecciona el workflow **Build Linux**
+3. Abre la ejecución más reciente (o la que quieras)
+4. En la sección **Artifacts** descarga **BizneAI-POS-Linux**
+5. Usa el `.AppImage` (ejecutable portable) o el `.deb` (instalador para Debian/Ubuntu)
+
+> 📄 **Documentación detallada:** Ver [docs/BUILD-LINUX.md](docs/BUILD-LINUX.md) para la guía completa de implementación, uso local y solución de problemas.
 
 ## 🔧 Scripts Disponibles
 
@@ -239,6 +250,8 @@ Si `npm run dist:win` falla con errores de módulos nativos (better-sqlite3, nod
 
 ## 📚 Documentación
 
+- [Changelog / Historial de versiones](CHANGELOG.md)
+- [Build Linux - Guía completa](docs/BUILD-LINUX.md)
 - [Guía de Instalación](INSTALLERS.md)
 - [Solución de Problemas](TROUBLESHOOTING.md)
 - [Integración Blockchain](BLOCKCHAIN_INTEGRATION.md)
@@ -274,4 +287,4 @@ Este proyecto está bajo la Licencia MIT - ver el archivo [LICENSE](LICENSE) par
 
 **Desarrollado con ❤️ por el equipo BizneAI**
 
-*Versión 1.0.0 - Julio 2024*
+*Versión 1.0.3 - Marzo 2026*

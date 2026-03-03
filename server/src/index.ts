@@ -18,6 +18,7 @@ import inventoryRoutes from './routes/inventoryRoutes';
 import ticketRoutes from './routes/ticketRoutes';
 import orderRoutes from './routes/orderRoutes';
 import imageRoutes from './routes/imageRoutes';
+import mcpProxyRoutes from './routes/mcpProxyRoutes';
 
 // Import middleware
 import { errorHandler } from './middleware/errorHandler';
@@ -84,7 +85,8 @@ app.get('/', (req, res) => {
   });
 });
 
-// API Routes
+// API Routes - proxy MCP primero (evita CORS en dev)
+app.use('/api/proxy', mcpProxyRoutes);
 app.use('/api/shop', shopRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/kitchen', kitchenRoutes);

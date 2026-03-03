@@ -20,6 +20,7 @@ import {
   MessageCircle
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
+import { getWhatsAppUrl } from '../constants/contact';
 
 interface FiscalConfig {
   rfc: string;
@@ -223,8 +224,7 @@ C.P. ${fiscalConfig.fiscalAddress.zipCode}
 
 Por favor, ayúdame a configurar la facturación electrónica.`;
 
-    const encodedMessage = encodeURIComponent(message);
-    const whatsappUrl = `https://wa.me/521234567890?text=${encodedMessage}`;
+    const whatsappUrl = getWhatsAppUrl(message);
     
     window.open(whatsappUrl, '_blank');
   };

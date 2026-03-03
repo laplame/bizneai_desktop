@@ -1,4 +1,4 @@
-name: Build Windows (PC)
+name: Build Linux
 
 on:
   push:
@@ -8,9 +8,9 @@ on:
   workflow_dispatch:  # Permite ejecución manual
 
 jobs:
-  build-windows:
-    runs-on: windows-latest
-    
+  build-linux:
+    runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -33,15 +33,13 @@ jobs:
       - name: Build application
         run: npm run build
 
-      - name: Build Windows installer
-        run: npx electron-builder --win --x64
+      - name: Build Linux (AppImage + deb)
+        run: npx electron-builder --linux --x64
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Desactiva firma de código en CI (no hay certificado)
-          CSC_IDENTITY_AUTO_DISCOVERY: false
 
-      - name: Upload Windows artifacts
+      - name: Upload Linux artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: BizneAI-POS-Windows
+          name: BizneAI-POS-Linux
           path: release/

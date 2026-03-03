@@ -49,7 +49,9 @@ import {
   Calendar,
   Clock as ClockIcon,
   Activity,
-  Zap
+  Zap,
+  X,
+  MessageCircle
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { storeAPI } from '../api/store';
@@ -59,6 +61,9 @@ import { useStore } from '../contexts/StoreContext';
 import { getStoreTypes, checkStoreTypesForUpdates, getStoreTypeLabel } from '../data/storeTypes';
 import { mapMcpProductToLocal } from '../utils/shopIdHelper';
 import { setLastSyncTime, isSyncDue } from '../utils/syncService';
+import { getWhatsAppUrl } from '../constants/contact';
+import { getVersionDisplay, BUILD_TIMESTAMP } from '../lib/buildInfo';
+import i18n from '../i18n';
 
 interface SettingsProps {
   isSetupMode?: boolean;
@@ -167,11 +172,21 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
   // UI State
   const [isLoading, setIsLoading] = useState(false);
   const [showPasscode, setShowPasscode] = useState(false);
+  const [kitchenEnabled, setKitchenEnabled] = useState(false);
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(['store-info']));
   const [apiConnectionStatus, setApiConnectionStatus] = useState<{
     connected: boolean;
     responseTime: number | null;
   }>({ connected: false, responseTime: null });
+  const [showContactDeveloperModal, setShowContactDeveloperModal] = useState(false);
+
+  // Cargar idioma guardado al montar
+  useEffect(() => {
+    const saved = localStorage.getItem('bizneai-language');
+    if (saved && (saved === 'es' || saved === 'en')) {
+      setBusinessSettings(prev => ({ ...prev, language: saved }));
+    }
+  }, []);
 
   // Load configuration on mount
   useEffect(() => {
@@ -311,6 +326,23 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
             cryptoEnabled: shopData.crypto || false
           }));
 
+          if (shopData.kitchenEnabled !== undefined) {
+            setKitchenEnabled(!!shopData.kitchenEnabled);
+          }
+
+          // Persistir kitchenEnabled en bizneai-store-config para que el POS muestre el menú Cocina
+          try {
+            const existingStoreConfig = localStorage.getItem('bizneai-store-config');
+            const storeConfig = existingStoreConfig ? JSON.parse(existingStoreConfig) : {};
+            if (shopData.kitchenEnabled !== undefined) {
+              storeConfig.kitchenEnabled = !!shopData.kitchenEnabled;
+              localStorage.setItem('bizneai-store-config', JSON.stringify(storeConfig));
+              window.dispatchEvent(new Event('store-config-updated'));
+            }
+          } catch (e) {
+            console.warn('Could not persist kitchenEnabled to store config:', e);
+          }
+
           // Actualizar StoreContext con datos del servidor
           setStoreIdentifiers({
             _id: shopData._id || null,
@@ -329,21 +361,22 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
             lastSync: new Date().toISOString()
           }));
 
-          // Guardar nombre en server-config para que POS lo resuelva rápido en arranque
+          // Guardar nombre y kitchenEnabled en server-config para que POS lo resuelva rápido
           try {
             const existingServerConfigRaw = localStorage.getItem('bizneai-server-config');
             if (existingServerConfigRaw) {
               const existingServerConfig = JSON.parse(existingServerConfigRaw);
-              localStorage.setItem(
-                'bizneai-server-config',
-                JSON.stringify({
-                  ...existingServerConfig,
-                  storeName: shopData.storeName || existingServerConfig.storeName || ''
-                })
-              );
+              const updated = {
+                ...existingServerConfig,
+                storeName: shopData.storeName || existingServerConfig.storeName || ''
+              };
+              if (shopData.kitchenEnabled !== undefined) {
+                updated.kitchenEnabled = !!shopData.kitchenEnabled;
+              }
+              localStorage.setItem('bizneai-server-config', JSON.stringify(updated));
             }
           } catch (configError) {
-            console.warn('Could not persist server storeName:', configError);
+            console.warn('Could not persist server config:', configError);
           }
 
           // Guardar productos reales del MCP para que POS no caiga en catálogo de muestra
@@ -491,6 +524,7 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
           ecommerceEnabled: config.ecommerceEnabled || false,
           cryptoEnabled: config.crypto || false
         }));
+        setKitchenEnabled(config.kitchenEnabled ?? false);
         
         // Actualizar StoreContext con el storeType cargado
         if (config.storeType) {
@@ -546,7 +580,7 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
         zip: storeInfo.zip,
         clientId: serverSync.shopId || '',
         ecommerceEnabled: paymentSettings.ecommerceEnabled,
-        kitchenEnabled: false,
+        kitchenEnabled,
         crypto: paymentSettings.cryptoEnabled,
         acceptedCryptocurrencies: Object.keys(paymentSettings.cryptoAddresses).filter(
           key => paymentSettings.cryptoAddresses[key as keyof CryptoConfig]
@@ -776,8 +810,12 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
   };
 
   const handleContactDeveloper = () => {
-    const message = encodeURIComponent('Hola, necesito ayuda con BizneAI POS');
-    window.open(`https://wa.me/1234567890?text=${message}`, '_blank');
+    setShowContactDeveloperModal(true);
+  };
+
+  const handleOpenWhatsApp = () => {
+    window.open(getWhatsAppUrl('Hola, necesito ayuda con BizneAI POS'), '_blank');
+    setShowContactDeveloperModal(false);
   };
 
   const copyToClipboard = (text: string) => {
@@ -810,6 +848,11 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
       <div className="settings-header">
         <h2>Configuración del Sistema</h2>
         <p>Gestiona la configuración de tu tienda y preferencias del sistema</p>
+        {BUILD_TIMESTAMP > 0 && (
+          <p style={{ fontSize: '0.75rem', color: 'var(--bs-dark-text-muted)', marginTop: '0.25rem' }}>
+            Build {getVersionDisplay()}
+          </p>
+        )}
       </div>
 
       {/* Server Sync Status */}
@@ -1032,6 +1075,23 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
               </select>
             </div>
           </div>
+          {(storeInfo.storeType === 'restaurant' || storeInfo.storeType === 'coffee-shop' || storeInfo.storeType === 'CoffeeShop' || storeInfo.storeType === 'Restaurant') && (
+            <div className="form-row">
+              <div className="form-group">
+                <label className="checkbox-label">
+                  <input
+                    type="checkbox"
+                    checked={kitchenEnabled}
+                    onChange={(e) => setKitchenEnabled(e.target.checked)}
+                  />
+                  <span>Habilitar módulo de cocina</span>
+                </label>
+                <small style={{ color: 'var(--bs-dark-text-muted)', display: 'block', marginTop: '0.25rem' }}>
+                  Muestra la sección Cocina en el sistema para gestionar órdenes de cocina
+                </small>
+              </div>
+            </div>
+          )}
           <div className="form-row">
             <div className="form-group">
               <label>Coordenadas GPS</label>
@@ -1090,7 +1150,12 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
               <label>Idioma</label>
               <select
                 value={businessSettings.language}
-                onChange={(e) => setBusinessSettings(prev => ({ ...prev, language: e.target.value }))}
+                onChange={(e) => {
+                  const lang = e.target.value as 'es' | 'en';
+                  setBusinessSettings(prev => ({ ...prev, language: lang }));
+                  localStorage.setItem('bizneai-language', lang);
+                  i18n.changeLanguage(lang);
+                }}
               >
                 <option value="es">Español</option>
                 <option value="en">English</option>
@@ -1437,6 +1502,35 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
           )}
         </button>
       </div>
+
+      {/* Modal Contactar Desarrollador */}
+      {showContactDeveloperModal && (
+        <div className="modal-overlay" onClick={() => setShowContactDeveloperModal(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Contactar Desarrollador</h3>
+              <button className="close-btn" onClick={() => setShowContactDeveloperModal(false)}>
+                <X size={20} />
+              </button>
+            </div>
+            <div className="modal-body">
+              <p>¿Deseas abrir WhatsApp para contactar al desarrollador de BizneAI POS?</p>
+              <p style={{ fontSize: '0.875rem', color: 'var(--bs-dark-text-muted)' }}>
+                Te redirigiremos a una conversación con un mensaje predefinido. Puedes editarlo antes de enviar.
+              </p>
+            </div>
+            <div className="modal-footer">
+              <button className="btn-secondary" onClick={() => setShowContactDeveloperModal(false)}>
+                Cancelar
+              </button>
+              <button className="btn-primary" onClick={handleOpenWhatsApp}>
+                <MessageCircle size={18} />
+                Abrir WhatsApp
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

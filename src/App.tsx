@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { 
   ShoppingCart, 
   Package, 
@@ -18,14 +19,19 @@ import {
   Warehouse,
   Clock,
   ReceiptText,
+  FileText,
   ChefHat,
   MessageSquare,
   Calendar,
   Info,
-  RefreshCw
+  RefreshCw,
+  PanelLeftClose,
+  ChevronDown,
+  ChevronUp,
+  User
 } from 'lucide-react';
 import { toast, Toaster } from 'react-hot-toast';
-import { getProductsFromMcp, mapMcpProductToLocal, getShopDataFromMcp, enrichProductsWithImages, isShopIdConfigured } from './utils/shopIdHelper';
+import { getProductsFromMcp, mapMcpProductToLocal, getShopDataFromMcp, enrichProductsWithImages, isShopIdConfigured, syncKitchenEnabledFromMcp } from './utils/shopIdHelper';
 import { maybeSyncIfDue, hasLocalData, setLastSyncTime } from './utils/syncService';
 import { createSale } from './api/sales';
 import BarcodeScanner from './components/BarcodeScanner';
@@ -47,6 +53,10 @@ import { storeAPI } from './api/store';
 import { waitlistAPI } from './api/waitlist';
 import { StoreProvider, useStore } from './contexts/StoreContext';
 import { shouldShowImage, markImageFailed } from './utils/imageCache';
+import ProductVariantSelectorModal from './components/ProductVariantSelectorModal';
+import { calculateProductPrice, buildVariantDisplayName } from './types/variants';
+import type { VariantGroup, SelectedVariants } from './types/variants';
+import { getVersionDisplay } from './lib/buildInfo';
 
 // Tipos de datos
 interface Product {
@@ -59,6 +69,8 @@ interface Product {
   barcode?: string; // Agregando código de barras
   isWeightBased?: boolean;
   hasVariants?: boolean;
+  variantGroups?: VariantGroup[];
+  primaryVariantGroup?: string;
 }
 
 interface CartItem {
@@ -66,7 +78,8 @@ interface CartItem {
   product: Product;
   quantity: number;
   weight?: number;
-  selectedVariants?: { [key: string]: string };
+  selectedVariants?: SelectedVariants;
+  variantDisplayName?: string;
   unitPrice: number;
   itemTotal: number;
   notes?: string;
@@ -77,12 +90,58 @@ interface CustomerInfo {
   phone?: string;
   email?: string;
   tableNumber?: string;
+  waiterName?: string;
 }
 
-// Datos de ejemplo con códigos de barras
+// Datos de ejemplo con códigos de barras (Café Latte tiene variantes tipo cafetería)
 const sampleProducts: Product[] = [
   { id: 1, name: 'Café Americano', price: 2.50, category: 'Bebidas', stock: 50, barcode: '1234567890123' },
-  { id: 2, name: 'Café Latte', price: 3.50, category: 'Bebidas', stock: 45, barcode: '1234567890124' },
+  {
+    id: 2,
+    name: 'Café Latte',
+    price: 4.00,
+    category: 'Bebidas',
+    stock: 45,
+    barcode: '1234567890124',
+    hasVariants: true,
+    variantGroups: [
+      {
+        name: 'Size',
+        label: 'Tamaño',
+        type: 'size',
+        isPrimary: true,
+        order: 0,
+        variants: [
+          { name: 'Chico', value: 'S', priceModifier: 0, isDefault: true, order: 0 },
+          { name: 'Mediano', value: 'M', priceModifier: 0.5, order: 1 },
+          { name: 'Grande', value: 'L', priceModifier: 1.0, order: 2 }
+        ]
+      },
+      {
+        name: 'Milk',
+        label: 'Tipo de leche',
+        type: 'custom',
+        order: 1,
+        variants: [
+          { name: 'Normal', value: 'normal', priceModifier: 0, isDefault: true, order: 0 },
+          { name: 'Leche almendras', value: 'almond', priceModifier: 0.5, order: 1 },
+          { name: 'Leche avena', value: 'oat', priceModifier: 0.5, order: 2 }
+        ]
+      },
+      {
+        name: 'Extras',
+        label: 'Extras',
+        type: 'custom',
+        allowMultiple: true,
+        order: 2,
+        variants: [
+          { name: 'Shot extra', value: 'extra_shot', priceModifier: 1.0, order: 0 },
+          { name: 'Crema batida', value: 'whipped', priceModifier: 0.5, order: 1 }
+        ]
+      }
+    ],
+    primaryVariantGroup: 'Size'
+  },
   { id: 3, name: 'Cappuccino', price: 3.00, category: 'Bebidas', stock: 40, barcode: '1234567890125' },
   { id: 4, name: 'Croissant', price: 2.00, category: 'Panadería', stock: 30, barcode: '1234567890126' },
   { id: 5, name: 'Muffin de Chocolate', price: 2.50, category: 'Panadería', stock: 25, barcode: '1234567890127' },
@@ -153,19 +212,159 @@ const normalizeProductId = (rawId: unknown, fallbackIndex: number): number => {
   return fallbackIndex + 1;
 };
 
+// Plantillas de variantes para productos conocidos (cafetería). Se aplican al cargar si el producto no tiene variantGroups.
+const VARIANT_TEMPLATES: Record<string, Partial<Product>> = {
+  'café latte': {
+    hasVariants: true,
+    variantGroups: [
+      {
+        name: 'Size',
+        label: 'Tamaño',
+        type: 'size',
+        isPrimary: true,
+        order: 0,
+        variants: [
+          { name: 'Chico', value: 'S', priceModifier: 0, isDefault: true, order: 0 },
+          { name: 'Mediano', value: 'M', priceModifier: 0.5, order: 1 },
+          { name: 'Grande', value: 'L', priceModifier: 1.0, order: 2 }
+        ]
+      },
+      {
+        name: 'Milk',
+        label: 'Tipo de leche',
+        type: 'custom',
+        order: 1,
+        variants: [
+          { name: 'Normal', value: 'normal', priceModifier: 0, isDefault: true, order: 0 },
+          { name: 'Leche almendras', value: 'almond', priceModifier: 0.5, order: 1 },
+          { name: 'Leche avena', value: 'oat', priceModifier: 0.5, order: 2 }
+        ]
+      },
+      {
+        name: 'Extras',
+        label: 'Extras',
+        type: 'custom',
+        allowMultiple: true,
+        order: 2,
+        variants: [
+          { name: 'Shot extra', value: 'extra_shot', priceModifier: 1.0, order: 0 },
+          { name: 'Crema batida', value: 'whipped', priceModifier: 0.5, order: 1 }
+        ]
+      }
+    ],
+    primaryVariantGroup: 'Size'
+  },
+  'cappuccino': {
+    hasVariants: true,
+    variantGroups: [
+      {
+        name: 'Size',
+        label: 'Tamaño',
+        type: 'size',
+        isPrimary: true,
+        order: 0,
+        variants: [
+          { name: 'Chico', value: 'S', priceModifier: 0, isDefault: true, order: 0 },
+          { name: 'Mediano', value: 'M', priceModifier: 0.5, order: 1 },
+          { name: 'Grande', value: 'L', priceModifier: 1.0, order: 2 }
+        ]
+      }
+    ],
+    primaryVariantGroup: 'Size'
+  },
+  'café americano': {
+    hasVariants: true,
+    variantGroups: [
+      {
+        name: 'Size',
+        label: 'Tamaño',
+        type: 'size',
+        isPrimary: true,
+        order: 0,
+        variants: [
+          { name: 'Chico', value: 'S', priceModifier: 0, isDefault: true, order: 0 },
+          { name: 'Mediano', value: 'M', priceModifier: 0.5, order: 1 },
+          { name: 'Grande', value: 'L', priceModifier: 1.0, order: 2 }
+        ]
+      }
+    ],
+    primaryVariantGroup: 'Size'
+  },
+  'smoothie': {
+    hasVariants: true,
+    variantGroups: [
+      {
+        name: 'Size',
+        label: 'Tamaño',
+        type: 'size',
+        isPrimary: true,
+        order: 0,
+        variants: [
+          { name: 'Chico', value: 'S', priceModifier: -5, isDefault: true, order: 0 },
+          { name: 'Mediano', value: 'M', priceModifier: 0, order: 1 },
+          { name: 'Grande', value: 'L', priceModifier: 5, order: 2 }
+        ]
+      }
+    ],
+    primaryVariantGroup: 'Size'
+  }
+};
+
+/** Normaliza variantGroups de API (p. ej. "options" -> "variants", nombres de variante) */
+const normalizeVariantGroups = (groups: any[]): any[] => {
+  if (!Array.isArray(groups)) return [];
+  return groups.map(g => {
+    const variants = g.variants ?? g.options ?? [];
+    return {
+      ...g,
+      name: g.name ?? g.id ?? '',
+      label: g.label ?? g.name ?? '',
+      variants: variants.map((v: any) => ({
+        name: v.name ?? v.label ?? v.optionName ?? v.value ?? '',
+        value: String(v.value ?? v.name ?? v.id ?? ''),
+        price: v.price,
+        priceModifier: v.priceModifier,
+        stock: v.stock,
+        isDefault: v.isDefault ?? v.default ?? false,
+        order: v.order ?? 0
+      }))
+    };
+  });
+};
+
+const applyVariantTemplates = (product: any): any => {
+  // Si ya tiene variantGroups de la API, normalizarlos
+  if (product?.variantGroups?.length) {
+    return {
+      ...product,
+      variantGroups: normalizeVariantGroups(product.variantGroups),
+      hasVariants: true,
+      primaryVariantGroup: product.primaryVariantGroup ?? product.variantGroups?.[0]?.name
+    };
+  }
+  const name = (product?.name || '').toLowerCase().trim();
+  const template = VARIANT_TEMPLATES[name];
+  if (!template) return product;
+  return { ...product, ...template };
+};
+
 const hydrateProductsForPos = (productsList: any[]): Product[] => {
   return (productsList || []).map((product: any, index: number) => {
+    const withVariants = applyVariantTemplates(product);
     const imageCandidate =
-      product?.image ||
-      product?.images?.[0] ||
-      product?.imageMetadata?.cloudinaryUrls?.[0] ||
-      product?.imageMetadata?.localUrls?.[0] ||
+      withVariants?.image ||
+      withVariants?.images?.[0] ||
+      withVariants?.imageMetadata?.cloudinaryUrls?.[0] ||
+      withVariants?.imageMetadata?.localUrls?.[0] ||
       '';
 
     return {
-      ...product,
-      id: normalizeProductId(product?.id, index),
-      image: normalizeProductImageUrl(imageCandidate)
+      ...withVariants,
+      id: normalizeProductId(withVariants?.id, index),
+      image: normalizeProductImageUrl(imageCandidate),
+      hasVariants: withVariants?.hasVariants ?? false,
+      variantGroups: withVariants?.variantGroups,
+      primaryVariantGroup: withVariants?.primaryVariantGroup
     };
   });
 };
@@ -212,6 +411,7 @@ const fetchProductsFromConfiguredMcp = async (): Promise<any[]> => {
 };
 
 function App() {
+  const { t } = useTranslation();
   const [products, setProducts] = useState<Product[]>(sampleProducts);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [productOrderCounts, setProductOrderCounts] = useState<{ [productId: number]: number }>({});
@@ -234,6 +434,7 @@ function App() {
   };
   const [isBarcodeScannerOpen, setIsBarcodeScannerOpen] = useState(false);
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
+  const [productForVariantModal, setProductForVariantModal] = useState<Product | null>(null);
   const [productManagementInitialView, setProductManagementInitialView] = useState<'list' | 'grid' | 'analytics' | 'inventory' | null>(null);
   const [productManagementRestockProduct, setProductManagementRestockProduct] = useState<{ id: number; name: string } | null>(null);
   const [isReportsOpen, setIsReportsOpen] = useState(false);
@@ -247,6 +448,7 @@ function App() {
   const [activeSection, setActiveSection] = useState<'pos' | 'cart' | 'products' | 'reports' | 'customers' | 'waitlist' | 'taxes' | 'kitchen' | 'chat' | 'coming-soon' | 'settings'>('pos');
   const [customerInfo, setCustomerInfo] = useState<CustomerInfo>({});
   const [orderNotes, setOrderNotes] = useState<string>('');
+  const [customerInfoCollapsed, setCustomerInfoCollapsed] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
   const [lastSaleData, setLastSaleData] = useState<{
     saleId: string;
@@ -258,7 +460,8 @@ function App() {
       phone: string;
     };
   } | null>(null);
-
+  const [storeConfigVersion, setStoreConfigVersion] = useState(0);
+  const [sidebarMinimal, setSidebarMinimal] = useState(() => localStorage.getItem('bizneai-sidebar-minimal') === 'true');
 
   // Estado para la configuración inicial
   const [isSetupComplete, setIsSetupComplete] = useState<boolean>(() => {
@@ -270,9 +473,29 @@ function App() {
   // Estado para el modal de carga de productos
   const [showProductUpload, setShowProductUpload] = useState(false);
 
-  // Cargar productos: modo standalone, datos persistentes. Siempre preferir local.
+  // Cargar productos: al iniciar, recargar desde MCP si está configurado para tener variantes actualizadas.
   const loadProducts = async () => {
-    // 1. Cargar desde localStorage (persistente, funciona sin conexión)
+    // 1. Si hay shopId configurado, intentar recargar desde MCP primero (productos con variantes actualizados)
+    if (isShopIdConfigured()) {
+      try {
+        syncKitchenEnabledFromMcp();
+        const mcpProducts = await getProductsFromMcp();
+        if (mcpProducts && mcpProducts.length > 0) {
+          const mappedProducts = mcpProducts.map((p: any, index: number) => mapMcpProductToLocal(p, index));
+          const hydrated = hydrateProductsForPos(mappedProducts);
+          setProducts(hydrated);
+          setCategories(extractCategories(hydrated));
+          localStorage.setItem('bizneai-products', JSON.stringify(hydrated));
+          setLastSyncTime();
+          maybeSyncIfDue();
+          return;
+        }
+      } catch (e) {
+        console.warn('Error al recargar productos desde servidor:', e);
+      }
+    }
+
+    // 2. Fallback: cargar desde localStorage (con plantillas de variantes aplicadas)
     const savedProducts = localStorage.getItem('bizneai-products');
     if (savedProducts) {
       try {
@@ -293,35 +516,33 @@ function App() {
               });
             }
           }
+          maybeSyncIfDue();
+          return;
         }
       } catch (error) {
         console.warn('Error parsing saved products:', error);
       }
     }
 
-    // 2. Si no hay datos locales, mostrar muestra y intentar primera carga en background
-    if (!hasLocalData()) {
-      setProducts(sampleProducts);
-      setCategories(extractCategories(sampleProducts));
-
-      if (isShopIdConfigured()) {
-        try {
-          const mcpProducts = await getProductsFromMcp();
-          if (mcpProducts && mcpProducts.length > 0) {
-            const mappedProducts = mcpProducts.map((p: any, index: number) => mapMcpProductToLocal(p, index));
-            const hydrated = hydrateProductsForPos(mappedProducts);
-            setProducts(hydrated);
-            setCategories(extractCategories(hydrated));
-            localStorage.setItem('bizneai-products', JSON.stringify(hydrated));
-            setLastSyncTime();
-          }
-        } catch (e) {
-          console.warn('Primera carga falló (sin conexión?):', e);
+    // 3. Sin datos locales: usar productos de ejemplo (incluyen Café Latte con variantes)
+    setProducts(sampleProducts);
+    setCategories(extractCategories(sampleProducts));
+    if (isShopIdConfigured()) {
+      try {
+        syncKitchenEnabledFromMcp();
+        const mcpProducts = await getProductsFromMcp();
+        if (mcpProducts && mcpProducts.length > 0) {
+          const mappedProducts = mcpProducts.map((p: any, index: number) => mapMcpProductToLocal(p, index));
+          const hydrated = hydrateProductsForPos(mappedProducts);
+          setProducts(hydrated);
+          setCategories(extractCategories(hydrated));
+          localStorage.setItem('bizneai-products', JSON.stringify(hydrated));
+          setLastSyncTime();
         }
+      } catch (e) {
+        console.warn('Primera carga falló (sin conexión?):', e);
       }
     }
-
-    // 3. Sincronización en background (una vez al día). products-updated actualiza la UI.
     maybeSyncIfDue();
   };
 
@@ -379,10 +600,22 @@ function App() {
     // Cargar productos al iniciar
     loadProducts();
 
+    // Sincronizar kitchenEnabled desde MCP al arranque (para mostrar menú Cocina)
+    if (isShopIdConfigured()) {
+      syncKitchenEnabledFromMcp();
+    }
+
     return () => {
       window.removeEventListener('storage', handleStorageChange);
       window.removeEventListener('products-updated', handleProductsUpdated);
     };
+  }, []);
+
+  // Escuchar actualizaciones de store-config (ej. kitchenEnabled desde MCP)
+  useEffect(() => {
+    const onStoreConfigUpdated = () => setStoreConfigVersion(v => v + 1);
+    window.addEventListener('store-config-updated', onStoreConfigUpdated);
+    return () => window.removeEventListener('store-config-updated', onStoreConfigUpdated);
   }, []);
 
   // Cargar carrito guardado al iniciar
@@ -521,27 +754,33 @@ function App() {
       return countB - countA;
     });
 
-  // Crear item del carrito con estructura completa
-  const createCartItem = (product: Product, quantity: number = 1, weight?: number, variants?: { [key: string]: string }): CartItem => {
-    let unitPrice = product.price;
-    
-    // Aplicar modificadores de variantes si existen
-    if (variants && product.hasVariants) {
-      // Aquí se calcularían los modificadores de precio de las variantes
-      // Por ahora mantenemos el precio base
-    }
-    
+  // Crear item del carrito con estructura completa (variantes, modificadores, notas)
+  const createCartItem = (
+    product: Product,
+    quantity: number = 1,
+    weight?: number,
+    variants?: SelectedVariants,
+    notes?: string
+  ): CartItem => {
+    const unitPrice = variants && product.hasVariants
+      ? calculateProductPrice(product, variants)
+      : product.price;
     const finalQuantity = product.isWeightBased && weight ? weight : quantity;
     const itemTotal = unitPrice * finalQuantity;
-    
+    const variantDisplayName = variants && product.variantGroups?.length
+      ? buildVariantDisplayName(product.name, product.variantGroups, variants)
+      : undefined;
+
     return {
       id: `${product.id}-${Date.now()}-${Math.random()}`,
       product,
       quantity: product.isWeightBased ? 1 : quantity,
       weight: product.isWeightBased ? weight || 1 : undefined,
       selectedVariants: variants,
+      variantDisplayName,
       unitPrice,
-      itemTotal
+      itemTotal,
+      notes
     };
   };
 
@@ -583,8 +822,14 @@ function App() {
     );
   };
 
-  // Agregar producto al carrito
-  const addToCart = (product: Product, quantity: number = 1, weight?: number, variants?: { [key: string]: string }) => {
+  // Agregar producto al carrito (con variantes y notas por línea)
+  const addToCart = (
+    product: Product,
+    quantity: number = 1,
+    weight?: number,
+    variants?: SelectedVariants,
+    notes?: string
+  ) => {
     // Validar inventario
     if (!product.isWeightBased && quantity > product.stock) {
       showStockInsufficientToast(product.stock, '', product);
@@ -595,9 +840,10 @@ function App() {
     incrementProductOrderCount(product.id);
     
     setCart(prevCart => {
-      // Buscar si ya existe un item con el mismo producto y variantes
+      // Buscar si ya existe un item con el mismo producto y variantes (normalizar id para string/number)
+      const productIdStr = String(product.id);
       const existingItem = prevCart.find(item => {
-        if (item.product.id !== product.id) return false;
+        if (String(item.product.id) !== productIdStr) return false;
         if (product.hasVariants && variants) {
           // Comparar variantes
           const itemVariants = JSON.stringify(item.selectedVariants || {});
@@ -634,7 +880,7 @@ function App() {
         });
       } else {
         // Agregar nuevo item
-        const newItem = createCartItem(product, quantity, weight, variants);
+        const newItem = createCartItem(product, quantity, weight, variants, notes);
         return [...prevCart, newItem];
       }
     });
@@ -649,6 +895,13 @@ function App() {
     } else {
       alert(`Producto con código ${barcode} no encontrado`);
     }
+  };
+
+  // Actualizar notas de un ítem del carrito
+  const updateCartItemNotes = (itemId: string, notes: string) => {
+    setCart(prev => prev.map(item =>
+      item.id === itemId ? { ...item, notes: notes.trim() || undefined } : item
+    ));
   };
 
   // Actualizar cantidad en el carrito (nuevo formato)
@@ -700,6 +953,51 @@ function App() {
     localStorage.removeItem('bizneai-cart-customer');
     localStorage.removeItem('bizneai-cart-notes');
     toast.success('Carrito limpiado');
+  };
+
+  // Enviar carrito a cocina (solo visible cuando kitchenEnabled)
+  const handleAddCartToKitchen = () => {
+    if (cart.length === 0) {
+      toast.error('El carrito está vacío');
+      return;
+    }
+    const orderId = `kitchen_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const items = cart.map(item => ({
+      product: {
+        id: item.product.id.toString(),
+        name: item.variantDisplayName || item.product.name,
+        price: item.unitPrice,
+        category: item.product.category,
+        isWeightBased: item.product.isWeightBased
+      },
+      quantity: item.product.isWeightBased ? (item.weight || 0) : item.quantity,
+      weight: item.weight,
+      notes: item.notes
+    }));
+    const total = cart.reduce((sum, item) => sum + item.itemTotal, 0);
+    const kitchenOrder = {
+      _id: orderId,
+      orderId: `ORD-${orderId.slice(-6)}`,
+      customerName: customerInfo.name || 'Cliente',
+      waiterName: customerInfo.waiterName,
+      tableNumber: customerInfo.tableNumber,
+      items,
+      total,
+      status: 'pending' as const,
+      priority: 'normal' as const,
+      timestamp: new Date().toISOString(),
+      notes: orderNotes || undefined,
+      specialInstructions: orderNotes || undefined,
+      source: 'pos' as const
+    };
+    const saved = localStorage.getItem('bizneai-kitchen-orders');
+    const orders = saved ? JSON.parse(saved) : [];
+    orders.unshift(kitchenOrder);
+    localStorage.setItem('bizneai-kitchen-orders', JSON.stringify(orders));
+    window.dispatchEvent(new CustomEvent('kitchen-updated'));
+    clearCart();
+    setActiveSection('kitchen');
+    toast.success('Orden enviada a cocina');
   };
 
   // Agregar carrito al waitlist
@@ -817,39 +1115,41 @@ function App() {
     });
 
     const apiPayload = {
-      customerName: customerInfo?.name,
+      customerName: customerInfo?.name || 'Cliente General',
       customerPhone: customerInfo?.phone,
       customerEmail: customerInfo?.email,
       tableNumber: customerInfo?.tableNumber,
-      items: cart.map((item) => ({
-        productId: String(item.product.id),
-        productName: item.product.name,
-        quantity: item.product.isWeightBased ? (item.weight ?? item.quantity) : item.quantity,
-        unitPrice: item.unitPrice,
-        totalPrice: item.itemTotal,
-        category: item.product.category
-      })),
+      waiterName: customerInfo?.waiterName,
+      items: cart.map((item) => {
+        const qty = item.product.isWeightBased ? (item.weight ?? item.quantity) : item.quantity;
+        return {
+          productId: String(item.product.id),
+          productName: item.variantDisplayName || item.product.name,
+          quantity: Number.isInteger(qty) ? qty : Math.max(1, Math.round(Number(qty))),
+          unitPrice: item.unitPrice,
+          category: (item.product.category || '').trim() || 'General',
+        };
+      }),
       subtotal,
       tax,
       discount,
       total: amount,
       paymentMethod,
-      paymentStatus: 'completed' as const,
-      transactionType: 'sale' as const,
       orderType: 'dine-in' as const,
       source: 'local' as const,
-      status: 'active' as const,
-      notes: orderNotes || undefined
+      notes: orderNotes || undefined,
     };
 
+    console.log('[SALE] handleCheckoutComplete → createSale', { saleId, amount, items: apiPayload.items?.length });
     const result = await createSale(apiPayload);
+    console.log('[SALE] handleCheckoutComplete ← createSale', { success: result.success, error: result.error });
 
     if (result.success) {
       toast.success(`Venta #${saleId} completada por $${amount.toFixed(2)} (sincronizada)`);
     } else {
       toast.success(`Venta #${saleId} completada por $${amount.toFixed(2)}`);
       if (result.error) {
-        console.warn('Venta guardada localmente, sync pendiente:', result.error);
+        console.warn('[SALE] Venta guardada localmente, sync pendiente:', result.error);
       }
     }
 
@@ -919,6 +1219,68 @@ function App() {
     // Refresh products list or add to current list
     toast.success(`Product "${product.name}" created successfully!`);
     // You can add logic here to refresh the products list
+  };
+
+  // Handler para cargar orden de cocina al carrito y cobrar
+  const handleLoadKitchenOrderToCart = (order: {
+    _id: string;
+    customerName: string;
+    waiterName?: string;
+    tableNumber?: string;
+    items: Array<{
+      product: { id: string; name: string; price: number; isWeightBased?: boolean };
+      quantity: number;
+      weight?: number;
+      notes?: string;
+    }>;
+    notes?: string;
+  }) => {
+    if (!order.items || order.items.length === 0) {
+      toast.error('Esta orden no tiene items');
+      return;
+    }
+    setCart([]);
+    order.items.forEach((item) => {
+      const product = products.find(
+        (p) =>
+          p.id.toString() === item.product.id?.toString() ||
+          p.name === item.product.name
+      );
+      if (product) {
+        addToCart(
+          product,
+          item.quantity || 1,
+          item.weight,
+          undefined,
+          item.notes
+        );
+      } else {
+        const syntheticProduct: Product = {
+          id: Number(item.product.id) || 900000 + order.items.indexOf(item),
+          name: item.product.name,
+          price: item.product.price,
+          category: (item.product as { category?: string }).category || 'General',
+          stock: 999,
+          isWeightBased: item.product.isWeightBased,
+        };
+        addToCart(
+          syntheticProduct,
+          item.quantity || 1,
+          item.weight,
+          undefined,
+          item.notes
+        );
+      }
+    });
+    setCustomerInfo({
+      name: order.customerName,
+      waiterName: order.waiterName,
+      tableNumber: order.tableNumber,
+    });
+    if (order.notes) setOrderNotes(order.notes);
+    setActiveSection('pos');
+    if (isKitchenOpen) setIsKitchenOpen(false);
+    toast.success(`Orden cargada al carrito (${order.items.length} items)`);
   };
 
   // Handler para cargar waitlist al carrito
@@ -999,6 +1361,21 @@ function App() {
                                savedStoreType === 'coffee-shop' || 
                                savedStoreType === 'CoffeeShop' ||
                                savedStoreType === 'Restaurant';
+    // Cocina visible cuando kitchenEnabled está activo (store-config o server-config como fallback)
+    const kitchenEnabled = (() => {
+      try {
+        if (savedConfig) {
+          const parsed = JSON.parse(savedConfig);
+          if (parsed.kitchenEnabled === true) return true;
+        }
+        const serverRaw = localStorage.getItem('bizneai-server-config');
+        if (serverRaw) {
+          const server = JSON.parse(serverRaw);
+          if (server.kitchenEnabled === true) return true;
+        }
+        return false;
+      } catch { return false; }
+    })();
     let configuredStoreName = '';
     try {
       const storeConfigRaw = localStorage.getItem('bizneai-store-config');
@@ -1055,170 +1432,197 @@ function App() {
       loadNameFromMcp();
     }, [storeIdentifiers.storeName, setStoreIdentifiers]);
     
-    // Debug temporal
-    if (activeSection === 'kitchen') {
-      console.log('Kitchen section active:', {
-        activeSection,
-        savedStoreType,
-        isRestaurantOrCafe,
-        storeIdentifiers
-      });
-    }
+  const toggleSidebarMinimal = () => {
+    setSidebarMinimal(prev => {
+      const next = !prev;
+      localStorage.setItem('bizneai-sidebar-minimal', String(next));
+      return next;
+    });
+  };
 
   return (
       <div className="pos-container">
-        {/* Sidebar */}
-        <div className="pos-sidebar">
-          {/* Nombre del shop */}
-          <div className="sidebar-section">
-            <div className="sidebar-title">
-              <Store size={20} />
-              {resolvedStoreName}
+        {/* Sidebar - click en nombre del shop para minimizar/mostrar iconos */}
+        <div className={`pos-sidebar ${sidebarMinimal ? 'pos-sidebar-minimal' : ''}`}>
+          {/* Logo / Tienda - click para toggle minimal/expandir (div para compatibilidad file:// en Electron) */}
+          <div className={`sidebar-section ${sidebarMinimal ? 'sidebar-section-minimal' : ''} sidebar-shop-toggle`}>
+            <div
+              role="button"
+              tabIndex={0}
+              className={`sidebar-item ${sidebarMinimal ? 'sidebar-item-icon-only' : 'sidebar-item-shop'} sidebar-item-clickable sidebar-toggle-btn`}
+              onClick={toggleSidebarMinimal}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleSidebarMinimal(); } }}
+              title={sidebarMinimal ? `${resolvedStoreName} (clic para expandir)` : `${resolvedStoreName} (clic para minimizar)`}
+              aria-label={sidebarMinimal ? 'Expandir menú' : 'Minimizar menú'}
+            >
+              <Store size={sidebarMinimal ? 22 : 20} />
+              {!sidebarMinimal && (
+                <>
+                  <span className="sidebar-shop-name">{resolvedStoreName}</span>
+                  <PanelLeftClose size={18} className="sidebar-collapse-icon" aria-hidden />
+                </>
+              )}
             </div>
           </div>
 
           {/* Fecha y hora */}
-          <div className="sidebar-date-time">
-            <span className="sidebar-date">{new Date().toLocaleDateString()}</span>
-            <span className="sidebar-time">
-              <LiveClock />
-            </span>
-          </div>
+          {sidebarMinimal ? (
+            <div className="sidebar-section sidebar-section-minimal sidebar-date-time-minimal">
+              <div className="sidebar-item sidebar-item-icon-only" title={new Date().toLocaleDateString() + ' ' + new Date().toLocaleTimeString()}>
+                <Clock size={22} />
+              </div>
+            </div>
+          ) : (
+            <div className="sidebar-date-time">
+              <span className="sidebar-date">{new Date().toLocaleDateString()}</span>
+              <span className="sidebar-time">
+                <LiveClock />
+              </span>
+            </div>
+          )}
 
           {/* Punto de venta */}
-          <div className="sidebar-section">
-            <div 
-              className={`sidebar-item ${activeSection === 'pos' ? 'active' : ''}`}
+          <div className={`sidebar-section ${sidebarMinimal ? 'sidebar-section-minimal' : ''}`}>
+            <div
+              className={`sidebar-item ${sidebarMinimal ? 'sidebar-item-icon-only' : ''} ${activeSection === 'pos' ? 'active' : ''}`}
               onClick={() => handleSectionChange('pos')}
+              title="Punto de Venta"
             >
-              <ShoppingCart size={20} />
-              Punto de Venta
+              <ShoppingCart size={sidebarMinimal ? 22 : 20} />
+              {!sidebarMinimal && 'Punto de Venta'}
             </div>
           </div>
 
-          {/* Carrito - unificado con POS, navega a la misma vista */}
-          <div className="sidebar-section">
-            <div 
-              className={`sidebar-item ${activeSection === 'pos' ? 'active' : ''}`}
+          {/* Carrito */}
+          <div className={`sidebar-section ${sidebarMinimal ? 'sidebar-section-minimal' : ''}`}>
+            <div
+              className={`sidebar-item ${sidebarMinimal ? 'sidebar-item-icon-only' : ''} ${activeSection === 'pos' ? 'active' : ''}`}
               onClick={() => handleSectionChange('cart')}
-              title="Ir al punto de venta con el carrito"
+              title="Carrito"
             >
-              <ShoppingBag size={20} />
-              Carrito
+              <ShoppingBag size={sidebarMinimal ? 22 : 20} />
+              {!sidebarMinimal && 'Carrito'}
             </div>
           </div>
 
           {/* Productos e inventario */}
-          <div className="sidebar-section">
-            <div 
-              className={`sidebar-item ${activeSection === 'products' ? 'active' : ''}`}
+          <div className={`sidebar-section ${sidebarMinimal ? 'sidebar-section-minimal' : ''}`}>
+            <div
+              className={`sidebar-item ${sidebarMinimal ? 'sidebar-item-icon-only' : ''} ${activeSection === 'products' ? 'active' : ''}`}
               onClick={() => handleSectionChange('products')}
+              title="Productos e Inventario"
             >
-              <Warehouse size={20} />
-              Productos e Inventario
+              <Warehouse size={sidebarMinimal ? 22 : 20} />
+              {!sidebarMinimal && 'Productos e Inventario'}
             </div>
           </div>
 
           {/* Ventas */}
-          <div className="sidebar-section">
-            <div 
-              className={`sidebar-item ${activeSection === 'reports' ? 'active' : ''}`}
+          <div className={`sidebar-section ${sidebarMinimal ? 'sidebar-section-minimal' : ''}`}>
+            <div
+              className={`sidebar-item ${sidebarMinimal ? 'sidebar-item-icon-only' : ''} ${activeSection === 'reports' ? 'active' : ''}`}
               onClick={() => handleSectionChange('reports')}
+              title="Ventas"
             >
-              <BarChart3 size={20} />
-              Ventas
+              <BarChart3 size={sidebarMinimal ? 22 : 20} />
+              {!sidebarMinimal && 'Ventas'}
             </div>
           </div>
 
           {/* Clientes */}
-          <div className="sidebar-section">
-            <div 
-              className={`sidebar-item ${activeSection === 'customers' ? 'active' : ''}`}
+          <div className={`sidebar-section ${sidebarMinimal ? 'sidebar-section-minimal' : ''}`}>
+            <div
+              className={`sidebar-item ${sidebarMinimal ? 'sidebar-item-icon-only' : ''} ${activeSection === 'customers' ? 'active' : ''}`}
               onClick={() => handleSectionChange('customers')}
+              title="Clientes"
             >
-              <Users size={20} />
-              Clientes
+              <Users size={sidebarMinimal ? 22 : 20} />
+              {!sidebarMinimal && 'Clientes'}
             </div>
           </div>
 
           {/* Lista de espera */}
-          <div className="sidebar-section">
-            <div 
-              className={`sidebar-item ${activeSection === 'waitlist' ? 'active' : ''}`}
+          <div className={`sidebar-section ${sidebarMinimal ? 'sidebar-section-minimal' : ''}`}>
+            <div
+              className={`sidebar-item ${sidebarMinimal ? 'sidebar-item-icon-only' : ''} ${activeSection === 'waitlist' ? 'active' : ''}`}
               onClick={() => handleSectionChange('waitlist')}
+              title="Lista de Espera"
             >
-              <Clock size={20} />
-              Lista de Espera
+              <Clock size={sidebarMinimal ? 22 : 20} />
+              {!sidebarMinimal && 'Lista de Espera'}
             </div>
           </div>
 
           {/* Impuestos */}
-          <div className="sidebar-section">
-            <div 
-              className={`sidebar-item ${activeSection === 'taxes' ? 'active' : ''}`}
+          <div className={`sidebar-section ${sidebarMinimal ? 'sidebar-section-minimal' : ''}`}>
+            <div
+              className={`sidebar-item ${sidebarMinimal ? 'sidebar-item-icon-only' : ''} ${activeSection === 'taxes' ? 'active' : ''}`}
               onClick={() => handleSectionChange('taxes')}
+              title="Impuestos"
             >
-              <ReceiptText size={20} />
-              Impuestos
+              <ReceiptText size={sidebarMinimal ? 22 : 20} />
+              {!sidebarMinimal && 'Impuestos'}
             </div>
           </div>
 
-          {/* Cocina - Solo para restaurantes y cafeterías */}
-          {isRestaurantOrCafe && (
-            <div className="sidebar-section">
-              <div 
-                className={`sidebar-item ${activeSection === 'kitchen' ? 'active' : ''}`}
+          {/* Cocina */}
+          {kitchenEnabled && (
+            <div className={`sidebar-section ${sidebarMinimal ? 'sidebar-section-minimal' : ''}`}>
+              <div
+                className={`sidebar-item ${sidebarMinimal ? 'sidebar-item-icon-only' : ''} ${activeSection === 'kitchen' ? 'active' : ''}`}
                 onClick={() => handleSectionChange('kitchen')}
+                title="Cocina"
               >
-                <ChefHat size={20} />
-                Cocina
+                <ChefHat size={sidebarMinimal ? 22 : 20} />
+                {!sidebarMinimal && 'Cocina'}
               </div>
             </div>
           )}
 
-          {/* BiznaAI Chat */}
-          <div className="sidebar-section">
-            <div 
-              className={`sidebar-item ${activeSection === 'chat' ? 'active' : ''}`}
+          {/* BizneAI Chat */}
+          <div className={`sidebar-section ${sidebarMinimal ? 'sidebar-section-minimal' : ''}`}>
+            <div
+              className={`sidebar-item ${sidebarMinimal ? 'sidebar-item-icon-only' : ''} ${activeSection === 'chat' ? 'active' : ''}`}
               onClick={() => handleSectionChange('chat')}
+              title="BizneAI Chat"
             >
-              <MessageSquare size={20} />
-              BiznaAI Chat
+              <MessageSquare size={sidebarMinimal ? 22 : 20} />
+              {!sidebarMinimal && 'BizneAI Chat'}
             </div>
           </div>
 
-          {/* Proximamente */}
-          <div className="sidebar-section">
-            <div 
-              className={`sidebar-item ${activeSection === 'coming-soon' ? 'active' : ''}`}
+          {/* Próximamente */}
+          <div className={`sidebar-section ${sidebarMinimal ? 'sidebar-section-minimal' : ''}`}>
+            <div
+              className={`sidebar-item ${sidebarMinimal ? 'sidebar-item-icon-only' : ''} ${activeSection === 'coming-soon' ? 'active' : ''}`}
               onClick={() => {
                 handleSectionChange('coming-soon');
                 setIsComingSoonOpen(true);
               }}
+              title="Próximamente"
             >
-              <Calendar size={20} />
-              Próximamente
+              <Calendar size={sidebarMinimal ? 22 : 20} />
+              {!sidebarMinimal && 'Próximamente'}
             </div>
           </div>
 
-          {/* Configuracion */}
-          <div className="sidebar-section">
-            <div 
-              className={`sidebar-item ${activeSection === 'settings' ? 'active' : ''}`}
+          {/* Configuración */}
+          <div className={`sidebar-section ${sidebarMinimal ? 'sidebar-section-minimal' : ''}`}>
+            <div
+              className={`sidebar-item ${sidebarMinimal ? 'sidebar-item-icon-only' : ''} ${activeSection === 'settings' ? 'active' : ''}`}
               onClick={() => handleSectionChange('settings')}
+              title="Configuración"
             >
-              <SettingsIcon size={20} />
-              Configuración
+              <SettingsIcon size={sidebarMinimal ? 22 : 20} />
+              {!sidebarMinimal && 'Configuración'}
             </div>
           </div>
 
-          {/* Version */}
-          <div className="sidebar-section">
-            <div className="sidebar-item sidebar-version">
-              <Info size={16} />
-              <span style={{ fontSize: '0.75rem', color: 'var(--bs-dark-text-muted)' }}>
-                Versión 1.0.0
-              </span>
+          {/* Versión */}
+          <div className={`sidebar-section ${sidebarMinimal ? 'sidebar-section-minimal sidebar-spacer' : ''}`}>
+            <div className={`sidebar-item ${sidebarMinimal ? 'sidebar-item-icon-only sidebar-version' : 'sidebar-version'} ${sidebarMinimal ? '' : 'sidebar-item-version-full'}`} title={`Versión ${getVersionDisplay()}`}>
+              <Info size={sidebarMinimal ? 18 : 16} />
+              {!sidebarMinimal && <span style={{ fontSize: '0.75rem', color: 'var(--bs-dark-text-muted)' }}>Versión {getVersionDisplay()}</span>}
             </div>
           </div>
         </div>
@@ -1226,25 +1630,26 @@ function App() {
         {/* Main Content */}
         <div className="pos-main">
           {/* Content */}
-          <div className={`pos-content ${activeSection === 'settings' ? 'settings-active' : ''} ${activeSection === 'chat' ? 'chat-active' : ''}`}>
+          <div className={`pos-content ${activeSection === 'settings' ? 'settings-active' : ''} ${activeSection === 'chat' ? 'chat-active' : ''} ${['pos', 'cart', 'products', 'reports', 'customers', 'taxes'].includes(activeSection) ? 'pos-content-with-cart' : ''}`}>
             {activeSection === 'settings' ? (
               <div style={{ padding: '1rem' }}>
                 <Settings />
               </div>
-            ) : activeSection === 'kitchen' && isRestaurantOrCafe ? (
-              <div style={{ padding: '1rem', height: '100%' }}>
+            ) : activeSection === 'kitchen' && kitchenEnabled ? (
+              <div className="kitchen-wrapper">
                 <Kitchen
                   isOpen={true}
                   onClose={() => {
                     setActiveSection('pos');
                   }}
+                  onLoadOrderToCart={handleLoadKitchenOrderToCart}
                 />
               </div>
             ) : activeSection === 'chat' ? (
               <div style={{ padding: 0, margin: 0, height: '100vh', width: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
                 <BizneAIChat isOpen={true} />
               </div>
-            ) : activeSection === 'waitlist' || (activeSection === 'kitchen' && !isRestaurantOrCafe) ? (
+            ) : activeSection === 'waitlist' || (activeSection === 'kitchen' && !kitchenEnabled) ? (
               <div style={{ padding: '2rem', textAlign: 'center' }}>
                 <Calendar size={64} style={{ margin: '0 auto 1rem', opacity: 0.5 }} />
                 <h2 style={{ marginBottom: '0.5rem' }}>Próximamente</h2>
@@ -1261,7 +1666,7 @@ function App() {
                     <div className="search-container">
                       <input
                         type="text"
-                        placeholder="Buscar productos o escanear código de barras..."
+                        placeholder={t('products.searchPlaceholder')}
                         className="search-bar"
                         value={searchTerm}
                         onChange={(e) => setSearchTerm(e.target.value)}
@@ -1269,7 +1674,7 @@ function App() {
                       <button
                         className="barcode-btn"
                         onClick={() => setIsBarcodeScannerOpen(true)}
-                        title="Escanear código de barras"
+                        title={t('products.scanBarcode')}
                       >
                         <Camera size={20} />
                       </button>
@@ -1291,8 +1696,8 @@ function App() {
                     {filteredProducts.length === 0 ? (
                       <div className="no-products">
                         <Package size={48} style={{ opacity: 0.5, marginBottom: '1rem' }} />
-                        <p>No products found</p>
-                        <small>Try adjusting your search or category filter</small>
+                        <p>{t('products.noProducts')}</p>
+                        <small>{t('products.tryAdjusting')}</small>
                       </div>
                     ) : (
                       filteredProducts.map((product) => (
@@ -1302,11 +1707,13 @@ function App() {
                           onClick={() => {
                             if (product.stock === 0) {
                               openInventoryForRestock(product);
+                            } else if (product.hasVariants && product.variantGroups?.length) {
+                              setProductForVariantModal(product);
                             } else {
                               addToCart(product);
                             }
                           }}
-                          title={product.stock === 0 ? 'Sin stock - Ir a inventario para agregar' : `Click to add ${product.name} to cart`}
+                          title={product.stock === 0 ? t('products.noStockClick') : `${t('products.addToCart')} ${product.name}`}
                         >
                           <div className="product-image">
                             {shouldShowImage(product.image) ? (
@@ -1321,23 +1728,28 @@ function App() {
                             )}
                           </div>
                           <div className="product-name">{product.name}</div>
-                          <div className="product-price">${product.price.toFixed(2)}</div>
+                          <div className="product-price">
+                            ${product.price.toFixed(2)}
+                            {product.hasVariants && product.variantGroups?.length && (
+                              <span className="product-variants-badge" title={t('products.hasVariants')}>+</span>
+                            )}
+                          </div>
                           {product.stock !== undefined && product.stock < 10 && product.stock > 0 && (
                             <div
                               className="product-stock-warning product-stock-action"
                               onClick={(e) => { e.stopPropagation(); openInventoryForRestock(product); }}
-                              title="Agregar stock rápidamente"
+                              title={t('products.addStock')}
                             >
-                              Stock bajo: {product.stock}
+                              {t('products.stockLow')}: {product.stock}
                             </div>
                           )}
                           {product.stock === 0 && (
                             <div
                               className="product-stock-out product-stock-action"
                               onClick={(e) => { e.stopPropagation(); openInventoryForRestock(product); }}
-                              title="Ir a inventario para agregar stock"
+                              title={t('products.addStock')}
                             >
-                              Sin stock
+                              {t('products.outOfStock')}
                             </div>
                           )}
                         </div>
@@ -1350,7 +1762,7 @@ function App() {
                   <div className="cart-header">
                     <div className="cart-header-left">
                       <ShoppingCart size={20} />
-                      <span>Carrito de Compras</span>
+                      <span>{t('cart.title')}</span>
                       {cart.length > 0 && (
                         <span className="cart-count-badge">{cart.reduce((sum, item) => sum + item.quantity, 0)}</span>
                       )}
@@ -1360,9 +1772,9 @@ function App() {
                     {cart.length === 0 ? (
                       <div className="empty-cart">
                         <div className="empty-cart-icon">🛒</div>
-                        <p>Your cart is empty</p>
+                        <p>{t('cart.empty')}</p>
                         <button className="action-btn" onClick={() => setSearchTerm('')}>
-                          Start to Sell
+                          {t('cart.startToSell')}
                         </button>
                       </div>
                     ) : (
@@ -1370,16 +1782,36 @@ function App() {
                         {cart.map(item => (
                         <div key={item.id} className="cart-item">
                           <div className="cart-item-info">
-                            <div className="cart-item-name">{item.product.name}</div>
+                            <div className="cart-item-name">
+                              {item.variantDisplayName || item.product.name}
+                            </div>
+                            <div className="cart-item-notes-row">
+                              {item.notes ? (
+                                <span className="cart-item-notes" title={item.notes}>📝 {item.notes}</span>
+                              ) : (
+                                <span className="cart-item-notes-placeholder">{t('cart.noNotes')}</span>
+                              )}
+                              <button
+                                type="button"
+                                className="cart-item-notes-edit"
+                                onClick={() => {
+                                  const newNotes = prompt(t('cart.notesForProduct'), item.notes || '');
+                                  if (newNotes !== null) updateCartItemNotes(item.id, newNotes);
+                                }}
+                                title={t('cart.editNotes')}
+                              >
+                                <FileText size={12} />
+                              </button>
+                            </div>
                               <div className="cart-item-details">
                                 <span className="cart-item-quantity-label">
                               {item.product.isWeightBased 
-                                    ? `Weight: ${item.weight?.toFixed(2)} kg`
-                                    : `Quantity: ${item.quantity}`
+                                    ? `${t('cart.weight')}: ${item.weight?.toFixed(2)} kg`
+                                    : `${t('cart.quantity')}: ${item.quantity}`
                                   }
                                 </span>
                                 <span className="cart-item-unit-price">
-                                  Unit Price: ${item.unitPrice.toFixed(2)}
+                                  {t('cart.unitPrice')}: ${item.unitPrice.toFixed(2)}
                                   {item.product.isWeightBased ? '/kg' : ''}
                                 </span>
                           </div>
@@ -1390,7 +1822,7 @@ function App() {
                             <button
                               className="quantity-btn"
                               onClick={() => updateCartQuantity(item.id, item.quantity - 1, item.weight)}
-                                  title="Decrease quantity"
+                                  title={t('cart.decreaseQuantity')}
                             >
                                   <Minus size={14} />
                             </button>
@@ -1400,14 +1832,14 @@ function App() {
                             <button
                               className="quantity-btn"
                               onClick={() => updateCartQuantity(item.id, item.quantity + 1, item.weight)}
-                                  title="Increase quantity"
+                                  title={t('cart.increaseQuantity')}
                             >
                                   <Plus size={14} />
                             </button>
                             <button
                                   className="quantity-btn remove-btn"
                               onClick={() => removeCartItem(item.id)}
-                                  title="Remove item"
+                                  title={t('cart.removeItem')}
                             >
                                   <Trash2 size={14} />
                             </button>
@@ -1420,43 +1852,68 @@ function App() {
                   </div>
                   {cart.length > 0 && (
                     <>
-                      {/* Customer Information Section - According to Gherkin */}
+                      {/* Customer Information Section - Collapsible */}
                       <div className="cart-customer-info">
-                        <h3 className="cart-section-title">Customer Information</h3>
-                        <input
-                          type="text"
-                          placeholder="Customer Name"
-                          className="cart-input"
-                          value={customerInfo.name || ''}
-                          onChange={(e) => setCustomerInfo({ ...customerInfo, name: e.target.value })}
-                        />
-                        <input
-                          type="text"
-                          placeholder="Table Number"
-                          className="cart-input"
-                          value={customerInfo.tableNumber || ''}
-                          onChange={(e) => setCustomerInfo({ ...customerInfo, tableNumber: e.target.value })}
-                        />
-                        <textarea
-                          placeholder="Order Notes"
-                          className="cart-textarea"
-                          value={orderNotes}
-                          onChange={(e) => setOrderNotes(e.target.value)}
-                          rows={2}
-                        />
+                        <button
+                          type="button"
+                          className="cart-customer-info-toggle"
+                          onClick={() => setCustomerInfoCollapsed(!customerInfoCollapsed)}
+                          aria-expanded={!customerInfoCollapsed}
+                        >
+                          <User size={16} />
+                          <span className="cart-section-title">{t('cart.customerInfo')}</span>
+                          {customerInfo.name || customerInfo.tableNumber || orderNotes ? (
+                            <span className="cart-customer-info-badge">•</span>
+                          ) : null}
+                          {customerInfoCollapsed ? <ChevronDown size={18} /> : <ChevronUp size={18} />}
+                        </button>
+                        {!customerInfoCollapsed && (
+                          <div className="cart-customer-info-fields">
+                            <input
+                              type="text"
+                              placeholder={t('cart.customerName')}
+                              className="cart-input"
+                              value={customerInfo.name || ''}
+                              onChange={(e) => setCustomerInfo({ ...customerInfo, name: e.target.value })}
+                            />
+                            {kitchenEnabled && (
+                              <input
+                                type="text"
+                                placeholder="Mesero (opcional)"
+                                className="cart-input"
+                                value={customerInfo.waiterName || ''}
+                                onChange={(e) => setCustomerInfo({ ...customerInfo, waiterName: e.target.value })}
+                              />
+                            )}
+                            <input
+                              type="text"
+                              placeholder={t('cart.tableNumber')}
+                              className="cart-input"
+                              value={customerInfo.tableNumber || ''}
+                              onChange={(e) => setCustomerInfo({ ...customerInfo, tableNumber: e.target.value })}
+                            />
+                            <textarea
+                              placeholder={t('cart.orderNotes')}
+                              className="cart-textarea"
+                              value={orderNotes}
+                              onChange={(e) => setOrderNotes(e.target.value)}
+                              rows={2}
+                            />
+                          </div>
+                        )}
                       </div>
-                      {/* Cart Totals - According to Gherkin */}
+                      {/* Cart Totals */}
                   <div className="cart-total">
                         <div className="cart-total-row">
-                          <span>Subtotal (excl. tax):</span>
+                          <span>{t('cart.subtotalExclTax')}</span>
                       <span>${cart.reduce((sum, item) => sum + item.itemTotal, 0).toFixed(2)}</span>
                     </div>
                         <div className="cart-total-row">
-                          <span>Tax amount:</span>
+                          <span>{t('cart.taxAmount')}</span>
                       <span>${(cart.reduce((sum, item) => sum + item.itemTotal, 0) * 0.16).toFixed(2)}</span>
                     </div>
                         <div className="cart-total-row cart-total-final">
-                          <span>Total (incl. tax):</span>
+                          <span>{t('cart.totalInclTax')}</span>
                       <span className="total-amount">${(cart.reduce((sum, item) => sum + item.itemTotal, 0) * 1.16).toFixed(2)}</span>
                     </div>
                   </div>
@@ -1468,45 +1925,56 @@ function App() {
                     <button 
                       className="action-btn" 
                       onClick={processSale} 
-                          title="Proceed to Checkout"
+                          title={t('cart.proceedToCheckout')}
                     >
                       <CreditCard size={20} style={{ marginRight: '0.5rem' }} />
-                          Proceed to Checkout
+                          {t('cart.proceedToCheckout')}
                     </button>
                     <button 
                       className="action-btn btn-waitlist" 
                       onClick={handleAddCartToWaitlist}
                           disabled={isProcessing}
-                          title="Add to Waitlist"
+                          title={t('cart.addToWaitlist')}
                     >
                       {isProcessing ? (
                         <>
                           <RefreshCw size={20} className="spinner" style={{ marginRight: '0.5rem' }} />
-                              Adding...
+                              {t('cart.adding')}
                         </>
                       ) : (
                         <>
                           <Clock size={20} style={{ marginRight: '0.5rem' }} />
-                              Add to Waitlist
+                              {t('cart.addToWaitlist')}
                         </>
                       )}
                     </button>
+                    {kitchenEnabled && (
+                      <button 
+                        className="action-btn"
+                        onClick={handleAddCartToKitchen}
+                        title="Enviar a cocina"
+                        style={{ background: 'var(--bs-primary)', color: 'white' }}
+                      >
+                        <ChefHat size={20} style={{ marginRight: '0.5rem' }} />
+                        Enviar a Cocina
+                      </button>
+                    )}
                         <button 
                           className="action-btn secondary" 
                           onClick={() => {
-                            if (window.confirm('Are you sure you want to clear the entire cart?')) {
+                            if (window.confirm(t('cart.clearCartConfirm'))) {
                               clearCart();
                             }
                           }}
                         >
                       <X size={20} style={{ marginRight: '0.5rem' }} />
-                          Clear Cart
+                          {t('cart.clearCart')}
                     </button>
                       </>
                     ) : (
                     <button className="action-btn secondary" onClick={showVirtualTicket}>
                       <Receipt size={20} style={{ marginRight: '0.5rem' }} />
-                        View Tickets
+                        {t('cart.viewTickets')}
                     </button>
                     )}
                   </div>
@@ -1521,6 +1989,17 @@ function App() {
           isOpen={isBarcodeScannerOpen}
           onClose={() => setIsBarcodeScannerOpen(false)}
           onScan={handleBarcodeScan}
+        />
+
+        {/* Modal de variantes y modificadores (cafetería) */}
+        <ProductVariantSelectorModal
+          isOpen={!!productForVariantModal}
+          onClose={() => setProductForVariantModal(null)}
+          product={productForVariantModal}
+          onAddToCart={(p, q, w, v, n) => {
+            addToCart(p, q, w, v, n);
+            setProductForVariantModal(null);
+          }}
         />
 
         {/* Checkout Modal */}
@@ -1602,6 +2081,7 @@ function App() {
               setIsKitchenOpen(false);
               setActiveSection('pos');
             }}
+            onLoadOrderToCart={handleLoadKitchenOrderToCart}
           />
         )}
 

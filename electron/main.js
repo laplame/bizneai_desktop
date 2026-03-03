@@ -1,4 +1,4 @@
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, session } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
@@ -35,9 +35,20 @@ function createWindow() {
     show: false, // Don't show until ready
   });
 
-  // Show window when ready
+  // Show window when ready (maximized / full screen)
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
+    mainWindow.maximize();
+  });
+
+  // Evitar que la ventana navegue a URLs externas (siempre mostrar POS local)
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    const parsed = new URL(url);
+    const isLocal = parsed.hostname === 'localhost' || parsed.protocol === 'file:' || parsed.protocol === 'data:';
+    if (!isLocal) {
+      event.preventDefault();
+    }
   });
 
   // Filter out non-critical DevTools console errors
@@ -52,7 +63,10 @@ function createWindow() {
          message.includes("'Autofill.setAddresses' wasn't found"))) {
       return; // Don't log these errors
     }
-    
+    // Log [SALE] flujo POST para verificar en terminal
+    if (typeof message === 'string' && message.includes('[SALE]')) {
+      console.log(`[Renderer] ${message}`);
+    }
     // Log other console messages normally (only errors and warnings)
     if (level >= 2) { // Warning (2) and Error (3) levels
       const levelName = level === 2 ? 'WARNING' : 'ERROR';
@@ -99,24 +113,21 @@ function createWindow() {
     });
   };
 
-  // Load the app
+  // Load the app - SIEMPRE carga el POS local (nunca bizneai.com)
   const loadApp = async () => {
-  if (isDev) {
-      // In development, try to load from Vite dev server first
+    const viteUrl = 'http://localhost:5173';
+    if (isDev) {
       const viteRunning = await checkViteServer();
       if (viteRunning) {
-    mainWindow.loadURL('http://localhost:5173');
-        mainWindow.webContents.openDevTools();
-        console.log('✅ Loaded from Vite dev server');
+        mainWindow.loadURL(viteUrl);
+        console.log('✅ POS cargado desde Vite (localhost:5173)');
         return;
       }
-      
-      console.log('⚠️ Vite dev server not running, trying dist folder...');
+      console.log('⚠️ Vite no está corriendo. Usando dist/ o mostrando instrucciones...');
       
       // Fallback to dist if dev server is not available
       if (distExists) {
         mainWindow.loadFile(distPath);
-    mainWindow.webContents.openDevTools();
         console.log('✅ Loaded from dist folder');
       } else {
         // Show error if neither is available
@@ -207,7 +218,17 @@ function createWindow() {
 }
 
 // This method will be called when Electron has finished initialization
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  // Vaciar cache para evitar cargar legacy UI/UX y builds anteriores
+  const ses = session.defaultSession;
+  try {
+    await ses.clearCache();
+    await ses.clearStorageData({ storages: ['cachestorage'] });
+    console.log('✅ Cache del sistema vaciado');
+  } catch (err) {
+    console.warn('⚠️ Error al vaciar cache:', err?.message || err);
+  }
+
   const mainWindow = createWindow();
 
   // Handle app activation on macOS
