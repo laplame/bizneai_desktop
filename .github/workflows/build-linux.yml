@@ -35,8 +35,7 @@ jobs:
 
       - name: Build Linux (AppImage + deb)
         run: npx electron-builder --linux --x64
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # No GH_TOKEN: evita que electron-builder intente publicar en Releases (usamos upload-artifact)
 
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@v4

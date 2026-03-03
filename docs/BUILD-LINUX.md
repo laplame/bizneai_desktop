@@ -55,25 +55,19 @@ release/
 
 ## Cómo usar los archivos generados
 
-### AppImage
+### AppImage (una línea)
 
 ```bash
-# Dar permisos de ejecución (solo la primera vez)
-chmod +x "BizneAI POS-x.x.x.AppImage"
-
-# Ejecutar
-./"BizneAI POS-x.x.x.AppImage"
+chmod +x "BizneAI POS-x.x.x.AppImage" && ./"BizneAI POS-x.x.x.AppImage"
 ```
 
-### Paquete .deb
+### Paquete .deb (una línea)
 
 ```bash
-# Instalar (requiere sudo)
-sudo dpkg -i bizneai-pos_x.x.x_amd64.deb
-
-# Si faltan dependencias, ejecutar:
-sudo apt-get install -f
+sudo dpkg -i bizneai-pos_x.x.x_amd64.deb && sudo apt-get install -f
 ```
+
+El `apt-get install -f` corrige dependencias faltantes automáticamente tras la instalación.
 
 ---
 
