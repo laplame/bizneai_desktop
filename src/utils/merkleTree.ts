@@ -8,6 +8,7 @@ export interface Transaction {
   data: any;
   previousData?: any;
   hash: string;
+  merkleProof?: string[];
 }
 
 export interface MerkleProof {
@@ -170,7 +171,7 @@ export const createDailyBlock = async (
 
   // Create block
   const block: Omit<DailyBlock, 'blockHash'> = {
-    id: `block_${date.replace(/-/g, '')}_${Date.now()}`,
+    id: `BLOCK-${date}-${Date.now()}`,
     date,
     transactions,
     merkleRoot,

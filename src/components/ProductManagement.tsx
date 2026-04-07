@@ -5,34 +5,25 @@ import {
   Edit, 
   Trash2, 
   Search, 
-  Filter,
   Save,
   X,
   AlertTriangle,
-  CheckCircle,
-  Eye,
-  EyeOff,
   BarChart3,
-  Tag,
-  Hash,
   FileText,
-  ImageIcon,
-  Upload,
   Download,
   RefreshCw,
   Warehouse,
-  TrendingUp,
-  TrendingDown,
-  Settings,
-  History,
-  AlertCircle,
-  CheckSquare,
-  Square,
-  Cloud,
   CloudDownload
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
-import { getProductsFromMcp, mapMcpProductToLocal, isShopIdConfigured, enrichProductsWithImages } from '../utils/shopIdHelper';
+import {
+  getProductsFromMcp,
+  mapMcpProductToLocal,
+  isShopIdConfigured,
+  enrichProductsWithImages,
+  mergeProductsFromServerPreserveImages,
+} from '../utils/shopIdHelper';
+import { syncProductImagesToLocalDisk } from '../services/productImageLocalCache';
 import { isSyncDue } from '../utils/syncService';
 import { shouldShowImage, markImageFailed } from '../utils/imageCache';
 import InventoryManagement from './InventoryManagement';
@@ -224,12 +215,18 @@ const ProductManagement = ({ isOpen, onClose, initialView, restockProduct, onRes
       
       if (mcpProducts && mcpProducts.length > 0) {
         hasServerDataRef.current = true;
-        const mappedProducts = mcpProducts.map((p: any, index: number) => mapMcpProductToLocal(p, index));
-        setProducts(mappedProducts);
-        setFilteredProducts(mappedProducts);
-        localStorage.setItem('bizneai-products', JSON.stringify(mappedProducts));
+        const localParsed = loadFromLocalStorage();
+        const mappedProducts = mcpProducts.map((p: unknown, index: number) => mapMcpProductToLocal(p, index));
+        const merged = mergeProductsFromServerPreserveImages(localParsed, mappedProducts) as unknown as Record<
+          string,
+          unknown
+        >[];
+        const withLocalImages = (await syncProductImagesToLocalDisk(merged)) as unknown as Product[];
+        setProducts(withLocalImages);
+        setFilteredProducts(withLocalImages);
+        localStorage.setItem('bizneai-products', JSON.stringify(withLocalImages));
         window.dispatchEvent(new Event('products-updated'));
-        toast.success(`${mappedProducts.length} productos cargados desde el servidor`, { id: 'loading-products' });
+        toast.success(`${withLocalImages.length} productos cargados desde el servidor`, { id: 'loading-products' });
       } else {
         const local = loadFromLocalStorage();
         let toUse = local.length > 0 ? local : generateSampleProducts();

@@ -1,4 +1,11 @@
 import { useState, useEffect } from 'react';
+import { toast } from 'react-hot-toast';
+import { computeCartTaxBreakdownFromCartItems, loadTaxSettings } from '../utils/taxSettings';
+import {
+  printReceiptThermalOrDialog,
+  resolveStoreNameForPrint,
+  isElectron,
+} from '../services/receiptPrintService';
 import { 
   Receipt, 
   QrCode, 
@@ -21,8 +28,13 @@ interface CartItem {
     category: string;
     stock: number;
     barcode?: string;
+    priceIncludesTax?: boolean;
+    taxExempt?: boolean;
   };
   quantity: number;
+  itemTotal?: number;
+  unitPrice?: number;
+  variantDisplayName?: string;
 }
 
 interface VirtualTicketProps {
@@ -38,6 +50,8 @@ interface VirtualTicketProps {
     email: string;
     phone: string;
   };
+  /** Si la impresión falla del todo (p. ej. ventana bloqueada), mostrar modal en el padre */
+  onPrintError?: (message: string) => void;
 }
 
 const VirtualTicket = ({ 
@@ -47,7 +61,8 @@ const VirtualTicket = ({
   saleId, 
   paymentMethod, 
   change = 0,
-  customerInfo 
+  customerInfo,
+  onPrintError,
 }: VirtualTicketProps) => {
   const [ticketUrl, setTicketUrl] = useState<string>('');
   const [copied, setCopied] = useState(false);
@@ -80,8 +95,57 @@ const VirtualTicket = ({
     }
   };
 
-  const handlePrint = () => {
-    window.print();
+  const handlePrint = async () => {
+    if (cart.length === 0) {
+      toast.error('No hay productos para imprimir');
+      return;
+    }
+    const taxSettings = loadTaxSettings();
+    const lineRows = cart.map((item) => ({
+      itemTotal: item.itemTotal ?? item.product.price * item.quantity,
+      product: {
+        priceIncludesTax: item.product.priceIncludesTax,
+        taxExempt: item.product.taxExempt,
+      },
+    }));
+    const { subtotalExclTax, taxAmount, total: finalTotal } = computeCartTaxBreakdownFromCartItems(
+      lineRows,
+      taxSettings
+    );
+
+    const result = await printReceiptThermalOrDialog({
+      storeName: resolveStoreNameForPrint(),
+      saleId,
+      date: new Date().toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' }),
+      items: cart.map((item) => {
+        const qty = item.quantity;
+        const unit = item.unitPrice ?? item.product.price;
+        const total = item.itemTotal ?? unit * qty;
+        return {
+          productName: item.variantDisplayName || item.product.name,
+          quantity: qty,
+          unitPrice: unit,
+          totalPrice: total,
+        };
+      }),
+      subtotal: subtotalExclTax,
+      tax: taxAmount,
+      total: finalTotal,
+      paymentMethod,
+      ticketKind: 'sale',
+    });
+
+    if (result.success) {
+      toast.success(
+        isElectron()
+          ? 'Enviado a la impresora térmica o abierto el cuadro de impresión'
+          : 'Abriendo cuadro de impresión…'
+      );
+    } else {
+      const msg = result.error || 'No se pudo imprimir';
+      toast.error(msg);
+      onPrintError?.(msg);
+    }
   };
 
   const handleShare = async () => {
@@ -125,9 +189,16 @@ const VirtualTicket = ({
     }
   };
 
-  const subtotal = cart.reduce((sum, item) => sum + (item.product.price * item.quantity), 0);
-  const tax = subtotal * 0.16;
-  const finalTotal = subtotal + tax;
+  const taxSettings = loadTaxSettings();
+  const lineRows = cart.map((item) => ({
+    itemTotal: item.itemTotal ?? item.product.price * item.quantity,
+    product: {
+      priceIncludesTax: item.product.priceIncludesTax,
+      taxExempt: item.product.taxExempt,
+    },
+  }));
+  const { subtotalExclTax, taxAmount, total: finalTotal } =
+    computeCartTaxBreakdownFromCartItems(lineRows, taxSettings);
 
   if (!isOpen) return null;
 
@@ -204,14 +275,14 @@ const VirtualTicket = ({
                 {cart.map((item, index) => (
                   <div key={index} className="item-row">
                     <div className="item-info">
-                      <span className="item-name">{item.product.name}</span>
+                      <span className="item-name">{item.variantDisplayName || item.product.name}</span>
                       <span className="item-category">{item.product.category}</span>
                     </div>
                     <div className="item-quantity">
-                      {item.quantity} x ${item.product.price.toFixed(2)}
+                      {item.quantity} x ${(item.unitPrice ?? item.product.price).toFixed(2)}
                     </div>
                     <div className="item-total">
-                      ${(item.product.price * item.quantity).toFixed(2)}
+                      ${(item.itemTotal ?? item.product.price * item.quantity).toFixed(2)}
                     </div>
                   </div>
                 ))}
@@ -221,11 +292,11 @@ const VirtualTicket = ({
             <div className="totals-section">
               <div className="total-row">
                 <span>Subtotal:</span>
-                <span>${subtotal.toFixed(2)}</span>
+                <span>${subtotalExclTax.toFixed(2)}</span>
               </div>
               <div className="total-row">
-                <span>IVA (16%):</span>
-                <span>${tax.toFixed(2)}</span>
+                <span>IVA ({taxSettings.taxRate}%):</span>
+                <span>${taxAmount.toFixed(2)}</span>
               </div>
               <div className="total-row total-final">
                 <span>Total:</span>

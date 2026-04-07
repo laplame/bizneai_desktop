@@ -1,4 +1,5 @@
 import { StoreConfig } from '../types/store';
+import { scheduleMirrorKeyToSqlite } from '../services/posPersistService';
 
 // Mock API para desarrollo
 const MOCK_DELAY = 1000; // 1 segundo de delay para simular red
@@ -30,7 +31,9 @@ export const storeAPI = {
       // Guardar en localStorage para persistencia
       localStorage.setItem('bizneai-store-config', JSON.stringify(config));
       localStorage.setItem('bizneai-setup-complete', 'true');
-      
+      scheduleMirrorKeyToSqlite('bizneai-store-config');
+      scheduleMirrorKeyToSqlite('bizneai-setup-complete');
+
       return {
         success: true,
         message: 'Tienda configurada exitosamente'
@@ -61,7 +64,8 @@ export const storeAPI = {
       const updatedConfig = { ...currentConfig, ...config };
       
       localStorage.setItem('bizneai-store-config', JSON.stringify(updatedConfig));
-      
+      scheduleMirrorKeyToSqlite('bizneai-store-config');
+
       return {
         success: true,
         message: 'Configuración actualizada exitosamente'

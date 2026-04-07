@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { scheduleMirrorKeyToSqlite } from '../services/posPersistService';
 
 interface StoreIdentifiers {
   _id: string | null;
@@ -56,6 +57,7 @@ export const StoreProvider: React.FC<StoreProviderProps> = ({ children }) => {
     // Guardar en localStorage
     try {
       localStorage.setItem('bizneai-store-identifiers', JSON.stringify(updatedIdentifiers));
+      scheduleMirrorKeyToSqlite('bizneai-store-identifiers');
     } catch (error) {
       console.error('Error saving store identifiers:', error);
     }
@@ -71,6 +73,7 @@ export const StoreProvider: React.FC<StoreProviderProps> = ({ children }) => {
       mcpUrl: null
     });
     localStorage.removeItem('bizneai-store-identifiers');
+    scheduleMirrorKeyToSqlite('bizneai-store-identifiers');
   };
 
   const isStoreConfigured = !!(storeIdentifiers._id && storeIdentifiers.clientId);

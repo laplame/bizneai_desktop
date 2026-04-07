@@ -1,45 +1,47 @@
 /**
- * Sales API - POST /api/mcp/:shopId/sales (MCP)
- * Crear venta según documentación MCP.
+ * Sales API - POST /api/:shopId/sales (Sales API principal)
+ * Crear venta según ShopTransactionSchema.
+ * - source por defecto: 'local'
+ * - totalPrice obligatorio en cada ítem
+ * - clientEventId para idempotencia
+ * - No descuenta stock automáticamente
  */
 
-import { getShopId, getMcpUrl } from '../utils/shopIdHelper';
+import { getShopId } from '../utils/shopIdHelper';
+import { getLocalApiOrigin, shouldUseSalesMcpProxy } from '../utils/localApiBase';
 
 const getApiOrigin = (): string => {
-  const mcpUrl = getMcpUrl();
-  if (mcpUrl) {
-    try {
-      return new URL(mcpUrl).origin;
-    } catch {
-      // fall through
-    }
-  }
   return 'https://www.bizneai.com';
 };
 
 export type PaymentMethod = 'cash' | 'card' | 'crypto' | 'mobile' | 'other';
 export type OrderType = 'dine-in' | 'takeaway' | 'delivery';
-export type Source = 'local' | 'online' | 'phone' | 'mcp';
+export type Source = 'local' | 'online' | 'phone';
 
-/** Item según MCP: productId, productName, quantity, unitPrice, category obligatorios */
-export interface McpSaleItem {
+/** Item según ShopTransactionSchema: totalPrice obligatorio */
+export interface ShopTransactionItem {
   productId: string;
   productName: string;
   quantity: number;
   unitPrice: number;
+  totalPrice: number;
   category: string;
 }
 
-/** Payload MCP - campos obligatorios y opcionales */
-export interface McpCreateSalePayload {
+/** Payload ShopTransaction para POST /api/:shopId/sales */
+export interface ShopTransactionPayload {
+  clientEventId: string;
+  clientTimestampUnixMs?: number;
+  sourcePlatform?: string;
+  sourceDeviceId?: string;
   customerName: string;
-  items: McpSaleItem[];
-  subtotal: number;
-  total: number;
   customerPhone?: string;
   customerEmail?: string;
+  items: ShopTransactionItem[];
+  subtotal: number;
   tax?: number;
   discount?: number;
+  total: number;
   paymentMethod?: PaymentMethod;
   orderType?: OrderType;
   source?: Source;
@@ -48,7 +50,7 @@ export interface McpCreateSalePayload {
   notes?: string;
 }
 
-export interface McpSaleResponse {
+export interface ShopTransactionResponse {
   transactionId?: string;
   receiptNumber?: string;
   transaction?: Record<string, unknown>;
@@ -68,7 +70,19 @@ const normalizePaymentMethod = (method: string): PaymentMethod => {
   return 'other';
 };
 
-/** Payload de entrada desde App - se normaliza a formato MCP */
+/** Genera UUID v4 para clientEventId */
+const generateClientEventId = (): string => {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+};
+
+/** Payload de entrada desde App - se normaliza a ShopTransaction */
 export interface CreateSaleInput {
   customerName?: string;
   customerPhone?: string;
@@ -96,10 +110,13 @@ export interface CreateSaleInput {
 }
 
 /**
- * Crea una venta en la API MCP.
- * POST /api/mcp/:shopId/sales
+ * Crea una venta en la Sales API principal.
+ * POST /api/:shopId/sales
+ * - source por defecto: 'local'
+ * - totalPrice obligatorio en cada ítem
+ * - clientEventId para idempotencia
  */
-export const createSale = async (payload: CreateSaleInput): Promise<ApiResponse<McpSaleResponse>> => {
+export const createSale = async (payload: CreateSaleInput): Promise<ApiResponse<ShopTransactionResponse>> => {
   const shopId = getShopId();
   if (!shopId) {
     return { success: false, error: 'Shop ID no configurado' };
@@ -109,15 +126,23 @@ export const createSale = async (payload: CreateSaleInput): Promise<ApiResponse<
     return { success: false, error: 'Items array is required and must not be empty' };
   }
 
-  // Normalizar items: obligatorios productId, productName, quantity, unitPrice, category
-  const items: McpSaleItem[] = payload.items.map((item) => {
+  const clientEventId = generateClientEventId();
+  const clientTimestampUnixMs = Date.now();
+
+  // Normalizar items: obligatorios productId, productName, quantity, unitPrice, totalPrice, category
+  const items: ShopTransactionItem[] = payload.items.map((item) => {
     const qty = item.quantity;
     const qtyInt = Number.isInteger(qty) ? qty : Math.max(1, Math.round(qty));
+    const unitPrice = Number(item.unitPrice) > 0 ? Number(item.unitPrice) : 0;
+    const totalPrice = item.totalPrice != null
+      ? Number(item.totalPrice)
+      : unitPrice * qtyInt;
     return {
       productId: String(item.productId).trim(),
       productName: (item.productName || '').trim() || 'Producto',
       quantity: qtyInt > 0 ? qtyInt : 1,
-      unitPrice: Number(item.unitPrice) > 0 ? Number(item.unitPrice) : 0,
+      unitPrice,
+      totalPrice: totalPrice > 0 ? totalPrice : unitPrice * (qtyInt > 0 ? qtyInt : 1),
       category: (item.category || '').trim() || 'General',
     };
   });
@@ -129,16 +154,21 @@ export const createSale = async (payload: CreateSaleInput): Promise<ApiResponse<
       !i.productName ||
       i.quantity <= 0 ||
       i.unitPrice <= 0 ||
+      i.totalPrice <= 0 ||
       !i.category
   );
   if (invalidItem) {
     return {
       success: false,
-      error: 'Items are missing required fields (productId, productName, quantity, unitPrice, category)',
+      error: 'Items are missing required fields (productId, productName, quantity, unitPrice, totalPrice, category)',
     };
   }
 
-  const mcpPayload: McpCreateSalePayload = {
+  const apiPayload: ShopTransactionPayload = {
+    clientEventId,
+    clientTimestampUnixMs,
+    sourcePlatform: 'desktop',
+    sourceDeviceId: undefined,
     customerName: (payload.customerName || '').trim().slice(0, 100) || 'Cliente General',
     items,
     subtotal: Number(payload.subtotal) > 0 ? Number(payload.subtotal) : payload.total,
@@ -155,25 +185,26 @@ export const createSale = async (payload: CreateSaleInput): Promise<ApiResponse<
     customerEmail: payload.customerEmail || undefined,
   };
 
-  const mcpUrl = getMcpUrl();
-  const url = mcpUrl ? `${mcpUrl}/sales` : `${getApiOrigin()}/api/mcp/${shopId}/sales`;
+  const url = shouldUseSalesMcpProxy()
+    ? `${getLocalApiOrigin()}/api/proxy/sales/${shopId}`
+    : `${getApiOrigin()}/api/${shopId}/sales`;
 
-  console.log('[SALE] POST MCP iniciando:', { url, shopId, total: mcpPayload.total, itemsCount: mcpPayload.items.length });
+  console.log('[SALE] POST Sales API iniciando:', { url, shopId, total: apiPayload.total, itemsCount: apiPayload.items.length, clientEventId });
 
   try {
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify(mcpPayload),
+      body: JSON.stringify(apiPayload),
     });
 
     const result = await response.json();
 
-    console.log('[SALE] POST MCP respuesta:', { status: response.status, ok: response.ok, hasData: !!result?.data });
+    console.log('[SALE] POST Sales API respuesta:', { status: response.status, ok: response.ok, hasData: !!result?.data });
 
     if (!response.ok) {
       const errMsg = result?.error || result?.message || result?.details || `Error ${response.status}`;
-      console.warn('[SALE] POST MCP falló:', { status: response.status, error: errMsg });
+      console.warn('[SALE] POST Sales API falló:', { status: response.status, error: errMsg });
       return {
         success: false,
         error: typeof errMsg === 'string' ? errMsg : JSON.stringify(errMsg),
@@ -181,7 +212,7 @@ export const createSale = async (payload: CreateSaleInput): Promise<ApiResponse<
     }
 
     if (response.status === 200 || response.status === 201) {
-      console.log('[SALE] POST MCP 200/201 OK - venta sincronizada:', {
+      console.log('[SALE] POST Sales API 200/201 OK - venta sincronizada:', {
         transactionId: result?.data?.transactionId ?? result?.transactionId,
         receiptNumber: result?.data?.receiptNumber ?? result?.receiptNumber,
       });
@@ -192,7 +223,7 @@ export const createSale = async (payload: CreateSaleInput): Promise<ApiResponse<
       data: result?.data ?? result,
     };
   } catch (err) {
-    console.error('[SALE] POST MCP error de conexión:', err);
+    console.error('[SALE] POST Sales API error de conexión:', err);
     return {
       success: false,
       error: err instanceof Error ? err.message : 'Error de conexión',

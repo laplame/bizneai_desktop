@@ -14,6 +14,8 @@ export * from './sales';
 export * from './orders';
 export * from './users';
 export * from './crypto';
+export * from './discountQr';
+export * from './roles';
 
 // Export types
 export type {

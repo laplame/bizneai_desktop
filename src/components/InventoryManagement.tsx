@@ -32,6 +32,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { shouldShowImage, markImageFailed } from '../utils/imageCache';
+import { scheduleMirrorKeyToSqlite } from '../services/posPersistService';
 
 interface Product {
   id: number;
@@ -133,6 +134,7 @@ const InventoryManagement: React.FC<InventoryManagementProps> = ({ products, onS
     const updated = [movement, ...inventoryHistory];
     setInventoryHistory(updated);
     localStorage.setItem('bizneai-inventory-history', JSON.stringify(updated));
+    scheduleMirrorKeyToSqlite('bizneai-inventory-history');
   };
 
   // Get stock status

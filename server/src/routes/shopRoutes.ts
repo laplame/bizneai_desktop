@@ -155,6 +155,39 @@ router.post('/', async (req, res) => {
   }
 });
 
+/**
+ * Proxy al API público BizneAI: el POS embebido no tiene catálogo local por shopId.
+ * Origen configurable con BIZNEAI_UPSTREAM_ORIGIN (por defecto https://www.bizneai.com).
+ */
+router.get('/:shopId/products', async (req, res) => {
+  const shopId = String(req.params.shopId || '').trim();
+  if (!shopId || shopId.length > 80) {
+    return res.status(400).json({ success: false, error: 'Invalid shop id' });
+  }
+  const limit = String(req.query.limit ?? '500');
+  const upstreamOrigin = (process.env.BIZNEAI_UPSTREAM_ORIGIN || 'https://www.bizneai.com').replace(/\/$/, '');
+  /**
+   * El endpoint histórico GET /api/shop/:id/products exige mainCategory y en la nube suele devolver 400
+   * aunque el parámetro sea válido. El listado estable es GET /api/products?shopId=&limit= (misma forma
+   * de respuesta: data.products + pagination).
+   */
+  const url = `${upstreamOrigin}/api/products?shopId=${encodeURIComponent(shopId)}&limit=${encodeURIComponent(limit)}`;
+  try {
+    const r = await fetch(url, {
+      headers: { Accept: 'application/json', 'User-Agent': 'BizneAI-Desktop-POS/1.0' },
+    });
+    const text = await r.text();
+    const ct = r.headers.get('content-type') || 'application/json';
+    if (!r.ok) {
+      console.warn('[shop proxy products]', url, r.status, text.slice(0, 400));
+    }
+    res.status(r.status).type(ct).send(text);
+  } catch (e) {
+    console.warn('[shop proxy products]', e);
+    res.status(200).json({ success: true, data: { products: [] } });
+  }
+});
+
 // 3. Get Shop by ID
 router.get('/:id', async (req, res) => {
   try {

@@ -1,3 +1,5 @@
+import { scheduleMirrorKeyToSqlite } from '../services/posPersistService';
+
 // Tipos de tienda hardcodeados desde la API
 // https://bizneai.com/api/shop/store-types?language=es
 // Solo se verifica si hay cambios en el primer inicio de sesión
@@ -306,7 +308,8 @@ export async function checkStoreTypesForUpdates(language: string = 'es'): Promis
         // Guardar la nueva lista
         localStorage.setItem('bizneai-store-types', JSON.stringify(apiTypes));
         localStorage.setItem('bizneai-store-types-checked', 'true');
-        
+        scheduleMirrorKeyToSqlite('bizneai-store-types');
+
         return {
           hasChanges: true,
           updatedTypes: apiTypes,

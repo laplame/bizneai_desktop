@@ -27,29 +27,13 @@ import {
   BarChart3,
   FileText
 } from 'lucide-react';
-
-interface Customer {
-  id: number;
-  firstName: string;
-  lastName: string;
-  email: string;
-  phone: string;
-  address: string;
-  city: string;
-  state: string;
-  zipCode: string;
-  birthday: string;
-  gender: 'male' | 'female' | 'other';
-  membershipLevel: 'bronze' | 'silver' | 'gold' | 'platinum';
-  totalSpent: number;
-  totalOrders: number;
-  lastPurchase: string;
-  isActive: boolean;
-  notes: string;
-  tags: string[];
-  createdAt: string;
-  updatedAt: string;
-}
+import type { RegistryCustomer as Customer } from '../types/customerRegistry';
+import {
+  loadCustomers,
+  saveCustomers,
+  computeCustomerStatus,
+  getCustomerStatusLabel,
+} from '../services/customerRegistry';
 
 interface Purchase {
   id: number;
@@ -69,128 +53,10 @@ interface CustomerManagementProps {
 const membershipLevels = ['bronze', 'silver', 'gold', 'platinum'];
 const genders = ['male', 'female', 'other'];
 
-// Datos de ejemplo para clientes
-const generateSampleCustomers = (): Customer[] => {
-  const customers: Customer[] = [
-    {
-      id: 1,
-      firstName: 'María',
-      lastName: 'González',
-      email: 'maria.gonzalez@email.com',
-      phone: '+52 55 1234 5678',
-      address: 'Av. Insurgentes Sur 1234',
-      city: 'Ciudad de México',
-      state: 'CDMX',
-      zipCode: '03100',
-      birthday: '1985-03-15',
-      gender: 'female',
-      membershipLevel: 'gold',
-      totalSpent: 2847.50,
-      totalOrders: 23,
-      lastPurchase: '2024-01-10T14:30:00Z',
-      isActive: true,
-      notes: 'Cliente frecuente, prefiere café americano y croissants. Siempre amable.',
-      tags: ['frecuente', 'café', 'mañana'],
-      createdAt: '2023-01-15T10:00:00Z',
-      updatedAt: '2024-01-10T14:30:00Z'
-    },
-    {
-      id: 2,
-      firstName: 'Carlos',
-      lastName: 'Rodríguez',
-      email: 'carlos.rodriguez@email.com',
-      phone: '+52 55 9876 5432',
-      address: 'Calle Reforma 567',
-      city: 'Guadalajara',
-      state: 'Jalisco',
-      zipCode: '44100',
-      birthday: '1990-07-22',
-      gender: 'male',
-      membershipLevel: 'silver',
-      totalSpent: 1245.75,
-      totalOrders: 12,
-      lastPurchase: '2024-01-08T16:45:00Z',
-      isActive: true,
-      notes: 'Cliente de oficina, compra sándwiches para el almuerzo.',
-      tags: ['oficina', 'almuerzo', 'sándwiches'],
-      createdAt: '2023-06-20T10:00:00Z',
-      updatedAt: '2024-01-08T16:45:00Z'
-    },
-    {
-      id: 3,
-      firstName: 'Ana',
-      lastName: 'Martínez',
-      email: 'ana.martinez@email.com',
-      phone: '+52 55 5555 1234',
-      address: 'Blvd. Constitución 890',
-      city: 'Monterrey',
-      state: 'Nuevo León',
-      zipCode: '64000',
-      birthday: '1988-11-08',
-      gender: 'female',
-      membershipLevel: 'platinum',
-      totalSpent: 5678.90,
-      totalOrders: 45,
-      lastPurchase: '2024-01-12T09:15:00Z',
-      isActive: true,
-      notes: 'Cliente VIP, ama los postres artesanales. Celebra cumpleaños aquí.',
-      tags: ['vip', 'postres', 'cumpleaños'],
-      createdAt: '2022-08-10T10:00:00Z',
-      updatedAt: '2024-01-12T09:15:00Z'
-    },
-    {
-      id: 4,
-      firstName: 'Luis',
-      lastName: 'Hernández',
-      email: 'luis.hernandez@email.com',
-      phone: '+52 55 4444 5678',
-      address: 'Calle Juárez 234',
-      city: 'Puebla',
-      state: 'Puebla',
-      zipCode: '72000',
-      birthday: '1995-04-30',
-      gender: 'male',
-      membershipLevel: 'bronze',
-      totalSpent: 345.25,
-      totalOrders: 4,
-      lastPurchase: '2024-01-05T12:20:00Z',
-      isActive: true,
-      notes: 'Cliente nuevo, parece interesado en bebidas especiales.',
-      tags: ['nuevo', 'bebidas', 'especiales'],
-      createdAt: '2023-12-15T10:00:00Z',
-      updatedAt: '2024-01-05T12:20:00Z'
-    },
-    {
-      id: 5,
-      firstName: 'Sofia',
-      lastName: 'López',
-      email: 'sofia.lopez@email.com',
-      phone: '+52 55 3333 9999',
-      address: 'Av. Hidalgo 456',
-      city: 'Querétaro',
-      state: 'Querétaro',
-      zipCode: '76000',
-      birthday: '1992-09-12',
-      gender: 'female',
-      membershipLevel: 'silver',
-      totalSpent: 1890.30,
-      totalOrders: 18,
-      lastPurchase: '2024-01-09T17:30:00Z',
-      isActive: false,
-      notes: 'Cliente inactivo desde hace 2 meses. Posible mudanza.',
-      tags: ['inactivo', 'mudanza'],
-      createdAt: '2023-03-05T10:00:00Z',
-      updatedAt: '2023-11-15T10:00:00Z'
-    }
-  ];
-  
-  return customers;
-};
-
-// Datos de ejemplo para compras
+// Datos de ejemplo para compras (historial demo en ficha de cliente)
 const generateSamplePurchases = (): Purchase[] => {
   const purchases: Purchase[] = [];
-  const customers = generateSampleCustomers();
+  const customers = loadCustomers();
   
   customers.forEach(customer => {
     const numPurchases = Math.floor(Math.random() * 10) + 1;
@@ -229,11 +95,11 @@ const CustomerManagement = ({ isOpen, onClose }: CustomerManagementProps) => {
 
   useEffect(() => {
     if (isOpen) {
-      const sampleCustomers = generateSampleCustomers();
+      const loaded = loadCustomers();
       const samplePurchases = generateSamplePurchases();
-      setCustomers(sampleCustomers);
+      setCustomers(loaded);
       setPurchases(samplePurchases);
-      setFilteredCustomers(sampleCustomers);
+      setFilteredCustomers(loaded);
     }
   }, [isOpen]);
 
@@ -300,21 +166,28 @@ const CustomerManagement = ({ isOpen, onClose }: CustomerManagementProps) => {
 
   const handleSaveCustomer = () => {
     if (isAddModalOpen) {
+      const nextId = customers.length ? Math.max(...customers.map((c) => c.id)) + 1 : 1;
+      const draft = { ...editingCustomer } as Customer;
       const newCustomer: Customer = {
-        ...editingCustomer as Customer,
-        id: Math.max(...customers.map(c => c.id)) + 1,
+        ...draft,
+        id: nextId,
+        customerStatus: computeCustomerStatus(draft),
         createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
+        updatedAt: new Date().toISOString(),
       };
-      setCustomers([...customers, newCustomer]);
+      const next = [...customers, newCustomer];
+      setCustomers(next);
+      saveCustomers(next);
       setIsAddModalOpen(false);
     } else if (isEditModalOpen && selectedCustomer) {
-      const updatedCustomers = customers.map(c =>
-        c.id === selectedCustomer.id
-          ? { ...editingCustomer as Customer, updatedAt: new Date().toISOString() }
-          : c
-      );
-      setCustomers(updatedCustomers);
+      const updated = customers.map((c) => {
+        if (c.id !== selectedCustomer.id) return c;
+        const merged = { ...(editingCustomer as Customer), updatedAt: new Date().toISOString() };
+        merged.customerStatus = computeCustomerStatus(merged);
+        return merged;
+      });
+      setCustomers(updated);
+      saveCustomers(updated);
       setIsEditModalOpen(false);
       setSelectedCustomer(null);
     }
@@ -323,7 +196,9 @@ const CustomerManagement = ({ isOpen, onClose }: CustomerManagementProps) => {
 
   const handleDeleteCustomer = (customerId: number) => {
     if (confirm('¿Estás seguro de que quieres eliminar este cliente?')) {
-      setCustomers(customers.filter(c => c.id !== customerId));
+      const next = customers.filter((c) => c.id !== customerId);
+      setCustomers(next);
+      saveCustomers(next);
     }
   };
 
@@ -533,7 +408,7 @@ const CustomerManagement = ({ isOpen, onClose }: CustomerManagementProps) => {
             <th>Compras</th>
             <th>Total Gastado</th>
             <th>Última Compra</th>
-            <th>Estado</th>
+            <th>Estado CRM</th>
             <th>Acciones</th>
           </tr>
         </thead>
@@ -588,9 +463,7 @@ const CustomerManagement = ({ isOpen, onClose }: CustomerManagementProps) => {
                   </span>
                 </td>
                 <td>
-                  <span className={`status-badge ${customer.isActive ? 'active' : 'inactive'}`}>
-                    {customer.isActive ? 'Activo' : 'Inactivo'}
-                  </span>
+                  <span className="crm-status-label">{getCustomerStatusLabel(customer.customerStatus)}</span>
                 </td>
                 <td>
                   <div className="action-buttons">

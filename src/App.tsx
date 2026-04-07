@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { 
   ShoppingCart, 
@@ -7,7 +7,6 @@ import {
   BarChart3, 
   Settings as SettingsIcon, 
   Camera,
-  Database,
   Plus,
   Minus,
   Trash2,
@@ -28,12 +27,34 @@ import {
   PanelLeftClose,
   ChevronDown,
   ChevronUp,
-  User
+  User,
+  Printer,
+  Lock
 } from 'lucide-react';
 import { toast, Toaster } from 'react-hot-toast';
-import { getProductsFromMcp, mapMcpProductToLocal, getShopDataFromMcp, enrichProductsWithImages, isShopIdConfigured, syncKitchenEnabledFromMcp } from './utils/shopIdHelper';
-import { maybeSyncIfDue, hasLocalData, setLastSyncTime } from './utils/syncService';
+import {
+  getProductsFromMcp,
+  mapMcpProductToLocal,
+  getShopDataFromMcp,
+  enrichProductsWithImages,
+  isShopIdConfigured,
+  syncKitchenEnabledFromMcp,
+  mergeProductsFromServerPreserveImages,
+} from './utils/shopIdHelper';
+import { normalizeProductId } from './utils/productId';
+import { maybeSyncIfDue, setLastSyncTime } from './utils/syncService';
 import { createSale } from './api/sales';
+import { computeCartTaxBreakdownFromCartItems, loadTaxSettings } from './utils/taxSettings';
+import {
+  loadCustomers,
+  recordPurchaseForCustomer,
+  getCustomerFullName,
+  getCustomerStatusLabel,
+} from './services/customerRegistry';
+import type { RegistryCustomer } from './types/customerRegistry';
+import type { RecoveredSalePayload } from './types/salesRecovery';
+import { recordSaleCreation } from './services/merkleTreeService';
+import { printReceiptThermalOrDialog, printProductCatalog, isElectron } from './services/receiptPrintService';
 import BarcodeScanner from './components/BarcodeScanner';
 import CheckoutModal from './components/CheckoutModal';
 import SalesReports from './components/SalesReports';
@@ -42,21 +63,40 @@ import CustomerManagement from './components/CustomerManagement';
 import VirtualTicket from './components/VirtualTicket';
 import Settings from './components/Settings';
 import ProductUpload from './components/ProductUpload';
-import Navbar from './components/Navbar';
 import Waitlist from './components/Waitlist';
 import Taxes from './components/Taxes';
 import Kitchen from './components/Kitchen';
 import BizneAIChat from './components/BizneAIChat';
 import ComingSoon from './components/ComingSoon';
 import LiveClock from './components/LiveClock';
+import MerkleBlocksWidget from './components/MerkleBlocksWidget';
+import LocalPersistenceStatus from './components/LocalPersistenceStatus';
+import ScreenLock from './components/ScreenLock';
+import ConfigurationAccessGate from './components/ConfigurationAccessGate';
 import { storeAPI } from './api/store';
 import { waitlistAPI } from './api/waitlist';
-import { StoreProvider, useStore } from './contexts/StoreContext';
+import { useStore } from './contexts/StoreContext';
 import { shouldShowImage, markImageFailed } from './utils/imageCache';
 import ProductVariantSelectorModal from './components/ProductVariantSelectorModal';
 import { calculateProductPrice, buildVariantDisplayName } from './types/variants';
 import type { VariantGroup, SelectedVariants } from './types/variants';
 import { getVersionDisplay } from './lib/buildInfo';
+import {
+  lockSession,
+  shouldShowScreenLockOnStartup,
+  isScreenLockEnabled,
+  hasScreenLockPinsConfigured,
+  getScreenLockIdentity,
+} from './services/rolesScreenLock';
+import { isConfigurationAccessUnlocked } from './services/configPasswords';
+import { recordSaleCashier } from './services/localActivityLog';
+import {
+  hydrateLocalFromServerIfEmpty,
+  initPosPersistence,
+  scheduleMirrorKeyToSqlite,
+} from './services/posPersistService';
+import { syncProductImagesToLocalDisk } from './services/productImageLocalCache';
+import { getKitchenModuleVisibility } from './utils/kitchenModule';
 
 // Tipos de datos
 interface Product {
@@ -71,6 +111,10 @@ interface Product {
   hasVariants?: boolean;
   variantGroups?: VariantGroup[];
   primaryVariantGroup?: string;
+  /** JSON/API: precio con IVA incluido para este artículo (sobrescribe la tienda). */
+  priceIncludesTax?: boolean;
+  /** JSON/API: artículo exento de impuesto. */
+  taxExempt?: boolean;
 }
 
 interface CartItem {
@@ -91,6 +135,8 @@ interface CustomerInfo {
   email?: string;
   tableNumber?: string;
   waiterName?: string;
+  /** Si se elige del registro de clientes (Clientes). */
+  customerId?: number;
 }
 
 // Datos de ejemplo con códigos de barras (Café Latte tiene variantes tipo cafetería)
@@ -194,24 +240,6 @@ const normalizeProductImageUrl = (value?: string): string => {
   return trimmed;
 };
 
-const normalizeProductId = (rawId: unknown, fallbackIndex: number): number => {
-  if (typeof rawId === 'number' && Number.isFinite(rawId)) return rawId;
-
-  if (typeof rawId === 'string') {
-    const numeric = Number(rawId);
-    if (Number.isFinite(numeric)) return numeric;
-
-    // Deterministic hash for Mongo-like IDs to keep a stable numeric ID
-    let hash = 0;
-    for (let i = 0; i < rawId.length; i++) {
-      hash = (hash * 31 + rawId.charCodeAt(i)) | 0;
-    }
-    return Math.abs(hash);
-  }
-
-  return fallbackIndex + 1;
-};
-
 // Plantillas de variantes para productos conocidos (cafetería). Se aplican al cargar si el producto no tiene variantGroups.
 const VARIANT_TEMPLATES: Record<string, Partial<Product>> = {
   'café latte': {
@@ -310,62 +338,87 @@ const VARIANT_TEMPLATES: Record<string, Partial<Product>> = {
   }
 };
 
+/** Fila API MCP para variantes (shape flexible) */
+type ApiVariantRow = Record<string, unknown>;
+type ApiProductRow = Record<string, unknown>;
+
 /** Normaliza variantGroups de API (p. ej. "options" -> "variants", nombres de variante) */
-const normalizeVariantGroups = (groups: any[]): any[] => {
+const normalizeVariantGroups = (groups: unknown): ApiVariantRow[] => {
   if (!Array.isArray(groups)) return [];
-  return groups.map(g => {
-    const variants = g.variants ?? g.options ?? [];
+  return groups.map((g) => {
+    const row = (g && typeof g === 'object' ? g : {}) as ApiVariantRow;
+    const rawV = row.variants ?? row.options;
+    const variants = Array.isArray(rawV) ? rawV : [];
     return {
-      ...g,
-      name: g.name ?? g.id ?? '',
-      label: g.label ?? g.name ?? '',
-      variants: variants.map((v: any) => ({
-        name: v.name ?? v.label ?? v.optionName ?? v.value ?? '',
-        value: String(v.value ?? v.name ?? v.id ?? ''),
-        price: v.price,
-        priceModifier: v.priceModifier,
-        stock: v.stock,
-        isDefault: v.isDefault ?? v.default ?? false,
-        order: v.order ?? 0
-      }))
+      ...row,
+      name: row.name ?? row.id ?? '',
+      label: row.label ?? row.name ?? '',
+      variants: variants.map((v) => {
+        const vr = (v && typeof v === 'object' ? v : {}) as ApiVariantRow;
+        return {
+          name: vr.name ?? vr.label ?? vr.optionName ?? vr.value ?? '',
+          value: String(vr.value ?? vr.name ?? vr.id ?? ''),
+          price: vr.price,
+          priceModifier: vr.priceModifier,
+          stock: vr.stock,
+          isDefault: vr.isDefault ?? vr.default ?? false,
+          order: vr.order ?? 0,
+        };
+      }),
     };
   });
 };
 
-const applyVariantTemplates = (product: any): any => {
-  // Si ya tiene variantGroups de la API, normalizarlos
-  if (product?.variantGroups?.length) {
+const applyVariantTemplates = (product: ApiProductRow): ApiProductRow => {
+  const vg = product.variantGroups;
+  if (Array.isArray(vg) && vg.length > 0) {
     return {
       ...product,
-      variantGroups: normalizeVariantGroups(product.variantGroups),
+      variantGroups: normalizeVariantGroups(vg),
       hasVariants: true,
-      primaryVariantGroup: product.primaryVariantGroup ?? product.variantGroups?.[0]?.name
+      primaryVariantGroup:
+        (product.primaryVariantGroup as string | undefined) ??
+        (typeof (vg[0] as ApiVariantRow)?.name === 'string' ? (vg[0] as ApiVariantRow).name : undefined),
     };
   }
-  const name = (product?.name || '').toLowerCase().trim();
+  const name = String(product.name || '')
+    .toLowerCase()
+    .trim();
   const template = VARIANT_TEMPLATES[name];
   if (!template) return product;
   return { ...product, ...template };
 };
 
-const hydrateProductsForPos = (productsList: any[]): Product[] => {
-  return (productsList || []).map((product: any, index: number) => {
-    const withVariants = applyVariantTemplates(product);
+const hydrateProductsForPos = (productsList: unknown[]): Product[] => {
+  const list = Array.isArray(productsList) ? productsList : [];
+  return list.map((product: unknown, index: number) => {
+    const withVariants = applyVariantTemplates(
+      (product && typeof product === 'object' ? product : {}) as ApiProductRow
+    );
+    const meta =
+      withVariants.imageMetadata && typeof withVariants.imageMetadata === 'object'
+        ? (withVariants.imageMetadata as Record<string, unknown>)
+        : {};
+    const cy = meta.cloudinaryUrls;
+    const lu = meta.localUrls;
+    const imgs = withVariants.images;
     const imageCandidate =
-      withVariants?.image ||
-      withVariants?.images?.[0] ||
-      withVariants?.imageMetadata?.cloudinaryUrls?.[0] ||
-      withVariants?.imageMetadata?.localUrls?.[0] ||
+      withVariants.image ||
+      (Array.isArray(imgs) ? imgs[0] : undefined) ||
+      (Array.isArray(cy) ? cy[0] : undefined) ||
+      (Array.isArray(lu) ? lu[0] : undefined) ||
       '';
 
     return {
       ...withVariants,
       id: normalizeProductId(withVariants?.id, index),
-      image: normalizeProductImageUrl(imageCandidate),
-      hasVariants: withVariants?.hasVariants ?? false,
+      image: normalizeProductImageUrl(
+        typeof imageCandidate === 'string' ? imageCandidate : String(imageCandidate ?? '')
+      ),
+      hasVariants: Boolean(withVariants?.hasVariants),
       variantGroups: withVariants?.variantGroups,
-      primaryVariantGroup: withVariants?.primaryVariantGroup
-    };
+      primaryVariantGroup: withVariants?.primaryVariantGroup,
+    } as Product;
   });
 };
 
@@ -391,22 +444,6 @@ const getConfiguredMcpUrl = (): string => {
     return serverConfig?.mcpUrl || '';
   } catch {
     return '';
-  }
-};
-
-const fetchProductsFromConfiguredMcp = async (): Promise<any[]> => {
-  const mcpUrl = getConfiguredMcpUrl();
-  if (!mcpUrl) return [];
-
-  try {
-    const response = await fetch(mcpUrl);
-    if (!response.ok) return [];
-    const payload = await response.json();
-    const shopData = payload?.data || payload;
-    return shopData?.products || [];
-  } catch (error) {
-    console.warn('Direct MCP fetch failed:', error);
-    return [];
   }
 };
 
@@ -445,6 +482,8 @@ function App() {
   const [isTaxesOpen, setIsTaxesOpen] = useState(false);
   const [isKitchenOpen, setIsKitchenOpen] = useState(false);
   const [isComingSoonOpen, setIsComingSoonOpen] = useState(false);
+  const [printErrorModal, setPrintErrorModal] = useState<{ message: string } | null>(null);
+  const [isPrintingCatalog, setIsPrintingCatalog] = useState(false);
   const [activeSection, setActiveSection] = useState<'pos' | 'cart' | 'products' | 'reports' | 'customers' | 'waitlist' | 'taxes' | 'kitchen' | 'chat' | 'coming-soon' | 'settings'>('pos');
   const [customerInfo, setCustomerInfo] = useState<CustomerInfo>({});
   const [orderNotes, setOrderNotes] = useState<string>('');
@@ -462,6 +501,27 @@ function App() {
   } | null>(null);
   const [storeConfigVersion, setStoreConfigVersion] = useState(0);
   const [sidebarMinimal, setSidebarMinimal] = useState(() => localStorage.getItem('bizneai-sidebar-minimal') === 'true');
+  const [registryCustomers, setRegistryCustomers] = useState<RegistryCustomer[]>([]);
+  const [screenLocked, setScreenLocked] = useState(() => {
+    try {
+      const stored = localStorage.getItem('bizneai-setup-complete');
+      const storeConfig = localStorage.getItem('bizneai-store-config');
+      const setupDone = stored === 'true' || storeConfig !== null;
+      if (!setupDone) return false;
+      return shouldShowScreenLockOnStartup();
+    } catch {
+      return false;
+    }
+  });
+
+  const cartTax = useMemo(
+    () =>
+      computeCartTaxBreakdownFromCartItems(
+        cart.map((item) => ({ itemTotal: item.itemTotal, product: item.product })),
+        loadTaxSettings()
+      ),
+    [cart, storeConfigVersion]
+  );
 
   // Estado para la configuración inicial
   const [isSetupComplete, setIsSetupComplete] = useState<boolean>(() => {
@@ -481,12 +541,25 @@ function App() {
         syncKitchenEnabledFromMcp();
         const mcpProducts = await getProductsFromMcp();
         if (mcpProducts && mcpProducts.length > 0) {
-          const mappedProducts = mcpProducts.map((p: any, index: number) => mapMcpProductToLocal(p, index));
-          const hydrated = hydrateProductsForPos(mappedProducts);
+          let savedParsed: unknown[] = [];
+          try {
+            const raw = localStorage.getItem('bizneai-products');
+            if (raw) {
+              const p = JSON.parse(raw);
+              if (Array.isArray(p)) savedParsed = p;
+            }
+          } catch {
+            /* ignore */
+          }
+          const mappedProducts = mcpProducts.map((p: unknown, index: number) => mapMcpProductToLocal(p, index));
+          const merged = mergeProductsFromServerPreserveImages(savedParsed, mappedProducts);
+          const mergedCached = await syncProductImagesToLocalDisk(merged);
+          const hydrated = hydrateProductsForPos(mergedCached);
           setProducts(hydrated);
           setCategories(extractCategories(hydrated));
           localStorage.setItem('bizneai-products', JSON.stringify(hydrated));
           setLastSyncTime();
+          window.dispatchEvent(new Event('products-updated'));
           maybeSyncIfDue();
           return;
         }
@@ -513,6 +586,7 @@ function App() {
                 setProducts(enriched);
                 setCategories(extractCategories(enriched));
                 localStorage.setItem('bizneai-products', JSON.stringify(enriched));
+                window.dispatchEvent(new Event('products-updated'));
               });
             }
           }
@@ -532,12 +606,25 @@ function App() {
         syncKitchenEnabledFromMcp();
         const mcpProducts = await getProductsFromMcp();
         if (mcpProducts && mcpProducts.length > 0) {
-          const mappedProducts = mcpProducts.map((p: any, index: number) => mapMcpProductToLocal(p, index));
-          const hydrated = hydrateProductsForPos(mappedProducts);
+          let savedParsed: unknown[] = [];
+          try {
+            const raw = localStorage.getItem('bizneai-products');
+            if (raw) {
+              const p = JSON.parse(raw);
+              if (Array.isArray(p)) savedParsed = p;
+            }
+          } catch {
+            /* ignore */
+          }
+          const mappedProducts = mcpProducts.map((p: unknown, index: number) => mapMcpProductToLocal(p, index));
+          const merged = mergeProductsFromServerPreserveImages(savedParsed, mappedProducts);
+          const mergedCached = await syncProductImagesToLocalDisk(merged);
+          const hydrated = hydrateProductsForPos(mergedCached);
           setProducts(hydrated);
           setCategories(extractCategories(hydrated));
           localStorage.setItem('bizneai-products', JSON.stringify(hydrated));
           setLastSyncTime();
+          window.dispatchEvent(new Event('products-updated'));
         }
       } catch (e) {
         console.warn('Primera carga falló (sin conexión?):', e);
@@ -563,6 +650,7 @@ function App() {
   useEffect(() => {
     if (Object.keys(productOrderCounts).length > 0) {
       localStorage.setItem('bizneai-product-order-counts', JSON.stringify(productOrderCounts));
+      scheduleMirrorKeyToSqlite('bizneai-product-order-counts');
     }
   }, [productOrderCounts]);
 
@@ -596,14 +684,15 @@ function App() {
 
     window.addEventListener('storage', handleStorageChange);
     window.addEventListener('products-updated', handleProductsUpdated);
-    
-    // Cargar productos al iniciar
-    loadProducts();
 
-    // Sincronizar kitchenEnabled desde MCP al arranque (para mostrar menú Cocina)
-    if (isShopIdConfigured()) {
-      syncKitchenEnabledFromMcp();
-    }
+    void (async () => {
+      await initPosPersistence();
+      await hydrateLocalFromServerIfEmpty();
+      loadProducts();
+      if (isShopIdConfigured()) {
+        syncKitchenEnabledFromMcp();
+      }
+    })();
 
     return () => {
       window.removeEventListener('storage', handleStorageChange);
@@ -616,6 +705,13 @@ function App() {
     const onStoreConfigUpdated = () => setStoreConfigVersion(v => v + 1);
     window.addEventListener('store-config-updated', onStoreConfigUpdated);
     return () => window.removeEventListener('store-config-updated', onStoreConfigUpdated);
+  }, []);
+
+  useEffect(() => {
+    const refresh = () => setRegistryCustomers(loadCustomers());
+    refresh();
+    window.addEventListener('customers-updated', refresh);
+    return () => window.removeEventListener('customers-updated', refresh);
   }, []);
 
   // Cargar carrito guardado al iniciar
@@ -653,6 +749,7 @@ function App() {
     } else {
       localStorage.removeItem('bizneai-cart');
     }
+    scheduleMirrorKeyToSqlite('bizneai-cart');
   }, [cart]);
 
   // Guardar información de cliente
@@ -662,6 +759,7 @@ function App() {
     } else {
       localStorage.removeItem('bizneai-cart-customer');
     }
+    scheduleMirrorKeyToSqlite('bizneai-cart-customer');
   }, [customerInfo]);
 
   // Guardar notas
@@ -671,6 +769,7 @@ function App() {
     } else {
       localStorage.removeItem('bizneai-cart-notes');
     }
+    scheduleMirrorKeyToSqlite('bizneai-cart-notes');
   }, [orderNotes]);
 
   // Verificar configuración al cargar la aplicación
@@ -681,6 +780,7 @@ function App() {
         if (response.isConfigured) {
           setIsSetupComplete(true);
           localStorage.setItem('bizneai-setup-complete', 'true');
+          scheduleMirrorKeyToSqlite('bizneai-setup-complete');
         }
       } catch {
         console.log('No se pudo verificar el estado de configuración, usando configuración local');
@@ -689,6 +789,7 @@ function App() {
         if (localConfig) {
           setIsSetupComplete(true);
           localStorage.setItem('bizneai-setup-complete', 'true');
+          scheduleMirrorKeyToSqlite('bizneai-setup-complete');
         }
       }
     };
@@ -727,11 +828,55 @@ function App() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!isSetupComplete) return;
+    setScreenLocked(shouldShowScreenLockOnStartup());
+  }, [isSetupComplete]);
+
+  /** Al guardar roles/PIN o cambiar el interruptor de bloqueo, volver a evaluar si debe mostrarse el lock */
+  useEffect(() => {
+    if (!isSetupComplete) return;
+    const syncLockFromStorage = () => {
+      setScreenLocked(shouldShowScreenLockOnStartup());
+    };
+    window.addEventListener('bizneai-roles-updated', syncLockFromStorage);
+    window.addEventListener('bizneai-screen-lock-settings-changed', syncLockFromStorage);
+    window.addEventListener('storage', syncLockFromStorage);
+    return () => {
+      window.removeEventListener('bizneai-roles-updated', syncLockFromStorage);
+      window.removeEventListener('bizneai-screen-lock-settings-changed', syncLockFromStorage);
+      window.removeEventListener('storage', syncLockFromStorage);
+    };
+  }, [isSetupComplete]);
+
+  useEffect(() => {
+    const onForceLock = () => {
+      lockSession();
+      if (isScreenLockEnabled() && hasScreenLockPinsConfigured()) {
+        setScreenLocked(true);
+      }
+    };
+    window.addEventListener('bizneai-force-screen-lock', onForceLock);
+    return () => window.removeEventListener('bizneai-force-screen-lock', onForceLock);
+  }, []);
+
   // Si la configuración no está completa, mostrar la pantalla de configuración
   if (!isSetupComplete) {
     return (
       <div className="pos-container">
         <Settings isSetupMode={true} onSetupComplete={() => setIsSetupComplete(true)} />
+      </div>
+    );
+  }
+
+  if (screenLocked) {
+    return (
+      <div className="pos-container">
+        <ScreenLock
+          onUnlock={() => {
+            setScreenLocked(false);
+          }}
+        />
       </div>
     );
   }
@@ -886,6 +1031,48 @@ function App() {
     });
   };
 
+  const handleRecoverSaleFromReports = (payload: RecoveredSalePayload) => {
+    setIsReportsOpen(false);
+    setActiveSection('pos');
+    setCustomerInfo(payload.customerName ? { name: payload.customerName } : {});
+    setOrderNotes(payload.notes || '');
+    setLastSaleData({
+      saleId: payload.displaySaleId,
+      paymentMethod: payload.paymentMethod,
+      change: undefined,
+      customerInfo: payload.customerName
+        ? { name: payload.customerName, email: '', phone: '' }
+        : undefined,
+    });
+
+    setCart(() => {
+      const next: CartItem[] = [];
+      for (const line of payload.items) {
+        const match = products.find(
+          (p) =>
+            String(p.id) === String(line.productId) ||
+            p.name.trim().toLowerCase() === line.name.trim().toLowerCase()
+        );
+        const product: Product =
+          match ??
+          ({
+            id:
+              typeof line.productId === 'number'
+                ? line.productId
+                : Number(String(line.productId).replace(/\D/g, '')) ||
+                  Math.floor(Math.random() * 900000) + 100000,
+            name: line.name,
+            price: line.unitPrice,
+            category: line.category || 'General',
+            stock: 9999,
+          } as Product);
+        next.push(createCartItem(product, line.quantity));
+      }
+      return next;
+    });
+    toast.success('Venta cargada en el carrito. Puedes editar y cobrar de nuevo.');
+  };
+
   // Buscar producto por código de barras
   const handleBarcodeScan = (barcode: string) => {
     const product = products.find(p => p.barcode === barcode);
@@ -955,8 +1142,12 @@ function App() {
     toast.success('Carrito limpiado');
   };
 
-  // Enviar carrito a cocina (solo visible cuando kitchenEnabled)
+  // Enviar carrito a cocina (solo tiendas restaurante/café con cocina activa)
   const handleAddCartToKitchen = () => {
+    if (!getKitchenModuleVisibility()) {
+      toast.error('Cocina no disponible para este tipo de tienda');
+      return;
+    }
     if (cart.length === 0) {
       toast.error('El carrito está vacío');
       return;
@@ -994,6 +1185,7 @@ function App() {
     const orders = saved ? JSON.parse(saved) : [];
     orders.unshift(kitchenOrder);
     localStorage.setItem('bizneai-kitchen-orders', JSON.stringify(orders));
+    scheduleMirrorKeyToSqlite('bizneai-kitchen-orders');
     window.dispatchEvent(new CustomEvent('kitchen-updated'));
     clearCart();
     setActiveSection('kitchen');
@@ -1072,6 +1264,7 @@ function App() {
       const waitlistEntries = savedWaitlist ? JSON.parse(savedWaitlist) : [];
       waitlistEntries.unshift(waitlistEntry);
       localStorage.setItem('bizneai-waitlist', JSON.stringify(waitlistEntries));
+      scheduleMirrorKeyToSqlite('bizneai-waitlist');
 
       // Disparar evento personalizado para actualizar waitlist
       window.dispatchEvent(new CustomEvent('waitlist-updated'));
@@ -1101,8 +1294,12 @@ function App() {
   // Manejar completar checkout (crea venta en API según Sales Sync Model)
   const handleCheckoutComplete = async (paymentMethod: string, amount: number, change?: number) => {
     const saleId = `TKT-${Math.floor(Math.random() * 100000) + 10000}`;
-    const subtotal = cart.reduce((sum, item) => sum + item.itemTotal, 0);
-    const tax = subtotal * 0.16;
+    const { subtotalExclTax, taxAmount } = computeCartTaxBreakdownFromCartItems(
+      cart.map((item) => ({ itemTotal: item.itemTotal, product: item.product })),
+      loadTaxSettings()
+    );
+    const subtotal = subtotalExclTax;
+    const tax = taxAmount;
     const discount = 0;
 
     setLastSaleData({
@@ -1122,11 +1319,13 @@ function App() {
       waiterName: customerInfo?.waiterName,
       items: cart.map((item) => {
         const qty = item.product.isWeightBased ? (item.weight ?? item.quantity) : item.quantity;
+        const quantity = Number.isInteger(qty) ? qty : Math.max(1, Math.round(Number(qty)));
         return {
           productId: String(item.product.id),
           productName: item.variantDisplayName || item.product.name,
-          quantity: Number.isInteger(qty) ? qty : Math.max(1, Math.round(Number(qty))),
+          quantity,
           unitPrice: item.unitPrice,
+          totalPrice: item.itemTotal,
           category: (item.product.category || '').trim() || 'General',
         };
       }),
@@ -1144,6 +1343,49 @@ function App() {
     const result = await createSale(apiPayload);
     console.log('[SALE] handleCheckoutComplete ← createSale', { success: result.success, error: result.error });
 
+    const resultData = result.data as Record<string, unknown> | undefined;
+    const nestedData =
+      resultData && typeof resultData === 'object' && 'data' in resultData && resultData.data != null
+        ? (resultData.data as Record<string, unknown>)
+        : undefined;
+    const remoteTransactionId =
+      (typeof resultData?.transactionId === 'string' && resultData.transactionId) ||
+      (nestedData && typeof nestedData.transactionId === 'string' ? nestedData.transactionId : undefined) ||
+      saleId;
+    const remoteClientEventId =
+      (typeof resultData?.clientEventId === 'string' && resultData.clientEventId) ||
+      (nestedData && typeof nestedData.clientEventId === 'string' ? nestedData.clientEventId : undefined);
+
+    recordSaleCashier({
+      transactionId: remoteTransactionId,
+      clientEventId: remoteClientEventId,
+      total: amount,
+      paymentMethod,
+      itemsSummary: apiPayload.items.map((i) => `${i.productName} x${i.quantity}`).join(', '),
+      identity: getScreenLockIdentity(),
+    });
+
+    // Registrar en Merkle Tree (historial inmutable local)
+    try {
+      await recordSaleCreation({
+        saleId,
+        transactionId: saleId,
+        customerName: apiPayload.customerName,
+        items: apiPayload.items,
+        subtotal: apiPayload.subtotal,
+        tax: apiPayload.tax,
+        discount: apiPayload.discount,
+        total: apiPayload.total,
+        paymentMethod: apiPayload.paymentMethod,
+        paymentStatus: 'completed',
+        date: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+        notes: apiPayload.notes,
+      });
+    } catch (merkleErr) {
+      console.warn('[SALE] Merkle recordSaleCreation:', merkleErr);
+    }
+
     if (result.success) {
       toast.success(`Venta #${saleId} completada por $${amount.toFixed(2)} (sincronizada)`);
     } else {
@@ -1153,8 +1395,71 @@ function App() {
       }
     }
 
+    if (customerInfo.customerId != null) {
+      recordPurchaseForCustomer(customerInfo.customerId, amount);
+    }
+
+    // Ticket: primero térmica directa (PosPrinter); si falla o timeout → cuadro del sistema (PDF / otra impresora)
+    try {
+      const storeName = (() => {
+        try {
+          const sc = localStorage.getItem('bizneai-store-config');
+          const sr = localStorage.getItem('bizneai-server-config');
+          const store = sc ? JSON.parse(sc) : null;
+          const server = sr ? JSON.parse(sr) : null;
+          return store?.storeName || store?.businessName || server?.storeName || undefined;
+        } catch { return undefined; }
+      })();
+      const printResult = await printReceiptThermalOrDialog({
+        storeName,
+        saleId,
+        ticketKind: 'sale',
+        date: new Date().toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' }),
+        items: apiPayload.items.map((i) => ({
+          productName: i.productName,
+          quantity: i.quantity,
+          unitPrice: i.unitPrice,
+          totalPrice: i.totalPrice ?? i.unitPrice * i.quantity,
+        })),
+        subtotal,
+        tax,
+        total: amount,
+        paymentMethod,
+      });
+      if (!printResult.success && printResult.error && isElectron()) {
+        setPrintErrorModal({ message: printResult.error });
+      }
+    } catch (e) {
+      if (isElectron()) {
+        const errMsg = e instanceof Error ? e.message : String(e);
+        setPrintErrorModal({ message: errMsg || 'Error desconocido al imprimir' });
+      }
+    }
+
     clearCart();
     setSearchTerm('');
+  };
+
+  const handlePrintProductCatalog = async () => {
+    if (filteredProducts.length === 0) {
+      toast.error('No hay productos para imprimir');
+      return;
+    }
+    setIsPrintingCatalog(true);
+    try {
+      const lines = filteredProducts.map((p) => ({ name: p.name, price: p.price }));
+      const result = await printProductCatalog(lines);
+      if (result.success) {
+        toast.success(isElectron() ? 'Lista enviada a la impresora' : 'Ventana de impresión abierta');
+      } else {
+        toast.error(result.error || 'No se pudo imprimir');
+        if (result.error && isElectron()) {
+          setPrintErrorModal({ message: result.error });
+        }
+      }
+    } finally {
+      setIsPrintingCatalog(false);
+    }
   };
 
   // Mostrar ticket virtual
@@ -1175,6 +1480,9 @@ function App() {
   };
 
   const handleSectionChange = (section: 'pos' | 'cart' | 'products' | 'reports' | 'customers' | 'waitlist' | 'taxes' | 'kitchen' | 'chat' | 'coming-soon' | 'settings') => {
+    if (section === 'kitchen' && !getKitchenModuleVisibility()) {
+      return;
+    }
     setActiveSection(section);
     if (section !== 'products') {
       setIsProductManagementOpen(false);
@@ -1198,21 +1506,6 @@ function App() {
       // Kitchen se renderiza directamente en el contenido, no como modal
       // Solo actualizar activeSection
     }
-  };
-
-  const getLastBackupTime = () => {
-    const lastBackup = localStorage.getItem('lastBackupTime');
-    if (!lastBackup) {
-      return 'Nunca';
-    }
-    const date = new Date(lastBackup);
-    return date.toLocaleDateString() + ' ' + date.toLocaleTimeString();
-  };
-
-
-  // Handler para click en botón de configuración en navbar
-  const handleNavbarSettingsClick = () => {
-    setActiveSection('settings');
   };
 
   const handleProductCreated = (product: { name: string; id?: string; price?: number; description?: string }) => {
@@ -1283,8 +1576,29 @@ function App() {
     toast.success(`Orden cargada al carrito (${order.items.length} items)`);
   };
 
+  interface WaitlistCartProduct {
+    id?: string | number;
+    name: string;
+    price?: number;
+    variants?: SelectedVariants;
+    category?: string;
+  }
+  interface WaitlistCartItem {
+    product: WaitlistCartProduct;
+    quantity?: number;
+    weight?: number;
+    selectedVariants?: SelectedVariants;
+    notes?: string;
+  }
+  interface WaitlistEntryForCart {
+    name?: string;
+    items: WaitlistCartItem[];
+    customerInfo?: { name?: string; phone?: string; email?: string };
+    notes?: string;
+  }
+
   // Handler para cargar waitlist al carrito
-  const handleLoadWaitlistToCart = (entry: any) => {
+  const handleLoadWaitlistToCart = (entry: WaitlistEntryForCart) => {
     if (!entry.items || entry.items.length === 0) {
       toast.error('Esta entrada no tiene items para cargar al carrito');
       return;
@@ -1294,7 +1608,7 @@ function App() {
     setCart([]);
     
     // Cargar cada item al carrito
-    entry.items.forEach((item: any) => {
+    entry.items.forEach((item) => {
       // Buscar el producto por ID o nombre
       const product = products.find(
         p => p.id.toString() === item.product.id?.toString() || 
@@ -1307,7 +1621,7 @@ function App() {
           product, 
           item.quantity || 1,
           item.weight, // Si es producto por peso
-          item.selectedVariants || item.product.variants // Variantes si existen
+          item.selectedVariants ?? item.product.variants // Variantes si existen
         );
       } else {
         // Si no se encuentra el producto, crear uno temporal
@@ -1343,39 +1657,21 @@ function App() {
   // Componente interno para usar el hook useStore
   const AppContent = () => {
     const { storeIdentifiers, setStoreIdentifiers } = useStore();
-    // Verificar storeType desde localStorage también por si no está en context
-    // También verificar desde la configuración guardada
-    const savedConfig = localStorage.getItem('bizneai-store-config');
-    let configStoreType = null;
-    if (savedConfig) {
-      try {
-        const parsed = JSON.parse(savedConfig);
-        configStoreType = parsed.storeType;
-      } catch (e) {
-        // Ignore parse errors
+    const [configSettingsUnlocked, setConfigSettingsUnlocked] = useState(() => isConfigurationAccessUnlocked());
+
+    useEffect(() => {
+      const onRevoked = () => setConfigSettingsUnlocked(false);
+      window.addEventListener('bizneai-config-access-revoked', onRevoked);
+      return () => window.removeEventListener('bizneai-config-access-revoked', onRevoked);
+    }, []);
+    /** Cocina: solo restaurante/cafetería y flag kitchenEnabled (MCP / Configuración). */
+    const showKitchenModule = getKitchenModuleVisibility(storeIdentifiers.storeType);
+
+    useEffect(() => {
+      if (activeSection === 'kitchen' && !showKitchenModule) {
+        setActiveSection('pos');
       }
-    }
-    const savedStoreType = storeIdentifiers.storeType || configStoreType || localStorage.getItem('bizneai-store-type');
-    // Verificar si es restaurante o cafetería (incluyendo los valores de la API)
-    const isRestaurantOrCafe = savedStoreType === 'restaurant' || 
-                               savedStoreType === 'coffee-shop' || 
-                               savedStoreType === 'CoffeeShop' ||
-                               savedStoreType === 'Restaurant';
-    // Cocina visible cuando kitchenEnabled está activo (store-config o server-config como fallback)
-    const kitchenEnabled = (() => {
-      try {
-        if (savedConfig) {
-          const parsed = JSON.parse(savedConfig);
-          if (parsed.kitchenEnabled === true) return true;
-        }
-        const serverRaw = localStorage.getItem('bizneai-server-config');
-        if (serverRaw) {
-          const server = JSON.parse(serverRaw);
-          if (server.kitchenEnabled === true) return true;
-        }
-        return false;
-      } catch { return false; }
-    })();
+    }, [activeSection, showKitchenModule, storeConfigVersion]);
     let configuredStoreName = '';
     try {
       const storeConfigRaw = localStorage.getItem('bizneai-store-config');
@@ -1432,15 +1728,35 @@ function App() {
       loadNameFromMcp();
     }, [storeIdentifiers.storeName, setStoreIdentifiers]);
     
-  const toggleSidebarMinimal = () => {
-    setSidebarMinimal(prev => {
-      const next = !prev;
-      localStorage.setItem('bizneai-sidebar-minimal', String(next));
-      return next;
-    });
-  };
+    const toggleSidebarMinimal = () => {
+      setSidebarMinimal(prev => {
+        const next = !prev;
+        localStorage.setItem('bizneai-sidebar-minimal', String(next));
+        scheduleMirrorKeyToSqlite('bizneai-sidebar-minimal');
+        return next;
+      });
+    };
 
-  return (
+    const handleLockScreen = () => {
+      lockSession();
+      setScreenLocked(true);
+    };
+
+    const sessionLockLabel = (() => {
+      const id = getScreenLockIdentity();
+      if (!id) return null;
+      if (id.source === 'legacy') return 'Código de seguridad';
+      if (id.source === 'super') return 'Superusuario';
+      const name = (id.name || '').trim();
+      const role = (id.role || '').trim();
+      if (name && role) return `${name} (${role})`;
+      if (name) return name;
+      if (role) return role;
+      const em = (id.email || '').trim();
+      return em || null;
+    })();
+
+    return (
       <div className="pos-container">
         {/* Sidebar - click en nombre del shop para minimizar/mostrar iconos */}
         <div className={`pos-sidebar ${sidebarMinimal ? 'pos-sidebar-minimal' : ''}`}>
@@ -1480,6 +1796,18 @@ function App() {
               </span>
             </div>
           )}
+
+          <div className={`sidebar-section ${sidebarMinimal ? 'sidebar-section-minimal' : ''} sidebar-persistence-section`}>
+            <LocalPersistenceStatus sidebarMinimal={sidebarMinimal} />
+          </div>
+
+          {/* Bloques Merkle - debajo del reloj */}
+          <div className={`sidebar-section ${sidebarMinimal ? 'sidebar-section-minimal' : ''} sidebar-merkle-widget`}>
+            <MerkleBlocksWidget
+              onOpenSales={() => handleSectionChange('reports')}
+              compact={sidebarMinimal}
+            />
+          </div>
 
           {/* Punto de venta */}
           <div className={`sidebar-section ${sidebarMinimal ? 'sidebar-section-minimal' : ''}`}>
@@ -1566,7 +1894,7 @@ function App() {
           </div>
 
           {/* Cocina */}
-          {kitchenEnabled && (
+          {showKitchenModule && (
             <div className={`sidebar-section ${sidebarMinimal ? 'sidebar-section-minimal' : ''}`}>
               <div
                 className={`sidebar-item ${sidebarMinimal ? 'sidebar-item-icon-only' : ''} ${activeSection === 'kitchen' ? 'active' : ''}`}
@@ -1606,6 +1934,30 @@ function App() {
             </div>
           </div>
 
+          <div className={`sidebar-section ${sidebarMinimal ? 'sidebar-section-minimal' : ''}`}>
+            {isScreenLockEnabled() && hasScreenLockPinsConfigured() ? (
+              <div
+                className={`sidebar-item ${sidebarMinimal ? 'sidebar-item-icon-only' : ''}`}
+                onClick={handleLockScreen}
+                title="Bloquear pantalla"
+                role="button"
+              >
+                <Lock size={sidebarMinimal ? 22 : 20} />
+                {!sidebarMinimal && 'Bloquear'}
+              </div>
+            ) : (
+              <div
+                className={`sidebar-item ${sidebarMinimal ? 'sidebar-item-icon-only' : ''}`}
+                onClick={() => handleSectionChange('settings')}
+                title="Configura PIN en Configuración → Roles y bloqueo de pantalla"
+                role="button"
+              >
+                <Lock size={sidebarMinimal ? 22 : 20} />
+                {!sidebarMinimal && 'Bloqueo PIN'}
+              </div>
+            )}
+          </div>
+
           {/* Configuración */}
           <div className={`sidebar-section ${sidebarMinimal ? 'sidebar-section-minimal' : ''}`}>
             <div
@@ -1629,13 +1981,62 @@ function App() {
 
         {/* Main Content */}
         <div className="pos-main">
+          <div className="pos-main-toolbar" role="toolbar" aria-label="Sesión y bloqueo">
+            {isScreenLockEnabled() && hasScreenLockPinsConfigured() ? (
+              <>
+                <div className="pos-main-toolbar-session">
+                  {sessionLockLabel ? (
+                    <span className="pos-main-toolbar-session-text" title="Usuario autenticado con PIN en esta sesión">
+                      <User size={16} aria-hidden />
+                      {sessionLockLabel}
+                    </span>
+                  ) : (
+                    <span className="pos-main-toolbar-session-muted">Inicia sesión con tu PIN al desbloquear</span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  className="pos-main-toolbar-lock-btn"
+                  onClick={handleLockScreen}
+                  title="Bloquear pantalla (requiere PIN para volver a entrar)"
+                >
+                  <Lock size={18} aria-hidden />
+                  <span>Bloquear</span>
+                </button>
+              </>
+            ) : (
+              <div className="pos-main-toolbar-hint">
+                <Lock size={18} aria-hidden />
+                <span className="pos-main-toolbar-hint-text">
+                  <strong>Bloqueo de pantalla:</strong> ve a{' '}
+                  <button
+                    type="button"
+                    className="pos-main-toolbar-link"
+                    onClick={() => handleSectionChange('settings')}
+                  >
+                    Configuración
+                  </button>
+                  , sección <strong>Roles y bloqueo de pantalla</strong>: activa el interruptor, pon un PIN de 4 dígitos y
+                  pulsa <strong>Guardar roles y PIN</strong>. También puedes usar el código de 4 dígitos en{' '}
+                  <strong>Seguridad</strong> (código de acceso).
+                </span>
+              </div>
+            )}
+          </div>
           {/* Content */}
           <div className={`pos-content ${activeSection === 'settings' ? 'settings-active' : ''} ${activeSection === 'chat' ? 'chat-active' : ''} ${['pos', 'cart', 'products', 'reports', 'customers', 'taxes'].includes(activeSection) ? 'pos-content-with-cart' : ''}`}>
             {activeSection === 'settings' ? (
               <div style={{ padding: '1rem' }}>
-                <Settings />
+                {configSettingsUnlocked ? (
+                  <Settings />
+                ) : (
+                  <ConfigurationAccessGate
+                    onUnlocked={() => setConfigSettingsUnlocked(true)}
+                    onCancel={() => setActiveSection('pos')}
+                  />
+                )}
               </div>
-            ) : activeSection === 'kitchen' && kitchenEnabled ? (
+            ) : activeSection === 'kitchen' && showKitchenModule ? (
               <div className="kitchen-wrapper">
                 <Kitchen
                   isOpen={true}
@@ -1649,7 +2050,7 @@ function App() {
               <div style={{ padding: 0, margin: 0, height: '100vh', width: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
                 <BizneAIChat isOpen={true} />
               </div>
-            ) : activeSection === 'waitlist' || (activeSection === 'kitchen' && !kitchenEnabled) ? (
+            ) : activeSection === 'waitlist' || (activeSection === 'kitchen' && !showKitchenModule) ? (
               <div style={{ padding: '2rem', textAlign: 'center' }}>
                 <Calendar size={64} style={{ margin: '0 auto 1rem', opacity: 0.5 }} />
                 <h2 style={{ marginBottom: '0.5rem' }}>Próximamente</h2>
@@ -1703,7 +2104,7 @@ function App() {
                       filteredProducts.map((product) => (
                         <div
                           key={product.id}
-                          className="product-card"
+                          className={`product-card ${shouldShowImage(product.image) ? 'product-card--has-image' : ''}`}
                           onClick={() => {
                             if (product.stock === 0) {
                               openInventoryForRestock(product);
@@ -1717,23 +2118,34 @@ function App() {
                         >
                           <div className="product-image">
                             {shouldShowImage(product.image) ? (
-                              <img
-                                src={product.image!}
-                                alt={product.name}
-                                onError={() => markImageFailed(product.image)}
-                                loading="lazy"
-                              />
+                              <>
+                                <img
+                                  src={product.image!}
+                                  alt={product.name}
+                                  onError={() => markImageFailed(product.image)}
+                                  loading="lazy"
+                                />
+                                <span className="product-add-overlay" aria-hidden="true">+</span>
+                                <div className="product-price-overlay">
+                                  ${product.price.toFixed(2)}
+                                  {product.hasVariants && product.variantGroups?.length && (
+                                    <span className="product-variants-badge" title={t('products.hasVariants')}>+</span>
+                                  )}
+                                </div>
+                              </>
                             ) : (
                               <Package size={32} />
                             )}
                           </div>
                           <div className="product-name">{product.name}</div>
-                          <div className="product-price">
-                            ${product.price.toFixed(2)}
-                            {product.hasVariants && product.variantGroups?.length && (
-                              <span className="product-variants-badge" title={t('products.hasVariants')}>+</span>
-                            )}
-                          </div>
+                          {!shouldShowImage(product.image) && (
+                            <div className="product-price">
+                              ${product.price.toFixed(2)}
+                              {product.hasVariants && product.variantGroups?.length && (
+                                <span className="product-variants-badge" title={t('products.hasVariants')}>+</span>
+                              )}
+                            </div>
+                          )}
                           {product.stock !== undefined && product.stock < 10 && product.stock > 0 && (
                             <div
                               className="product-stock-warning product-stock-action"
@@ -1869,14 +2281,56 @@ function App() {
                         </button>
                         {!customerInfoCollapsed && (
                           <div className="cart-customer-info-fields">
+                            <label className="cart-input-label" htmlFor="cart-customer-select">
+                              Cliente del registro
+                            </label>
+                            <select
+                              id="cart-customer-select"
+                              className="cart-input"
+                              value={customerInfo.customerId != null ? String(customerInfo.customerId) : ''}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                if (!v) {
+                                  setCustomerInfo({
+                                    ...customerInfo,
+                                    customerId: undefined,
+                                  });
+                                  return;
+                                }
+                                const id = parseInt(v, 10);
+                                const c = registryCustomers.find((x) => x.id === id);
+                                if (!c) return;
+                                setCustomerInfo({
+                                  ...customerInfo,
+                                  customerId: id,
+                                  name: getCustomerFullName(c),
+                                  email: c.email,
+                                  phone: c.phone,
+                                });
+                              }}
+                            >
+                              <option value="">Cliente ocasional (nombre abajo)</option>
+                              {registryCustomers.map((c) => (
+                                <option key={c.id} value={c.id}>
+                                  {getCustomerFullName(c)} — {getCustomerStatusLabel(c.customerStatus)}
+                                  {!c.isActive ? ' (inactivo)' : ''}
+                                </option>
+                              ))}
+                            </select>
                             <input
                               type="text"
                               placeholder={t('cart.customerName')}
                               className="cart-input"
                               value={customerInfo.name || ''}
-                              onChange={(e) => setCustomerInfo({ ...customerInfo, name: e.target.value })}
+                              onChange={(e) =>
+                                setCustomerInfo({
+                                  ...customerInfo,
+                                  name: e.target.value,
+                                  customerId: undefined,
+                                })
+                              }
                             />
-                            {kitchenEnabled && (
+                            {showKitchenModule && (
                               <input
                                 type="text"
                                 placeholder="Mesero (opcional)"
@@ -1906,15 +2360,15 @@ function App() {
                   <div className="cart-total">
                         <div className="cart-total-row">
                           <span>{t('cart.subtotalExclTax')}</span>
-                      <span>${cart.reduce((sum, item) => sum + item.itemTotal, 0).toFixed(2)}</span>
+                      <span>${cartTax.subtotalExclTax.toFixed(2)}</span>
                     </div>
                         <div className="cart-total-row">
                           <span>{t('cart.taxAmount')}</span>
-                      <span>${(cart.reduce((sum, item) => sum + item.itemTotal, 0) * 0.16).toFixed(2)}</span>
+                      <span>${cartTax.taxAmount.toFixed(2)}</span>
                     </div>
                         <div className="cart-total-row cart-total-final">
                           <span>{t('cart.totalInclTax')}</span>
-                      <span className="total-amount">${(cart.reduce((sum, item) => sum + item.itemTotal, 0) * 1.16).toFixed(2)}</span>
+                      <span className="total-amount">${cartTax.total.toFixed(2)}</span>
                     </div>
                   </div>
                     </>
@@ -1922,14 +2376,30 @@ function App() {
                   <div className="cart-actions">
                     {cart.length > 0 ? (
                       <>
+                    <div className="cart-actions-row cart-actions-row-checkout">
                     <button 
-                      className="action-btn" 
+                      className="action-btn cart-btn-checkout-main" 
                       onClick={processSale} 
                           title={t('cart.proceedToCheckout')}
                     >
                       <CreditCard size={20} style={{ marginRight: '0.5rem' }} />
                           {t('cart.proceedToCheckout')}
                     </button>
+                    <button
+                      type="button"
+                      className="action-btn action-btn-print-catalog"
+                      onClick={handlePrintProductCatalog}
+                      disabled={isPrintingCatalog || filteredProducts.length === 0}
+                      title="Imprimir lista de productos (respeta búsqueda y categoría)"
+                    >
+                      {isPrintingCatalog ? (
+                        <RefreshCw size={20} className="spinner" />
+                      ) : (
+                        <Printer size={20} />
+                      )}
+                      <span className="cart-print-label">Imprimir</span>
+                    </button>
+                    </div>
                     <button 
                       className="action-btn btn-waitlist" 
                       onClick={handleAddCartToWaitlist}
@@ -1948,7 +2418,7 @@ function App() {
                         </>
                       )}
                     </button>
-                    {kitchenEnabled && (
+                    {showKitchenModule && (
                       <button 
                         className="action-btn"
                         onClick={handleAddCartToKitchen}
@@ -1972,10 +2442,26 @@ function App() {
                     </button>
                       </>
                     ) : (
-                    <button className="action-btn secondary" onClick={showVirtualTicket}>
-                      <Receipt size={20} style={{ marginRight: '0.5rem' }} />
+                    <div className="cart-actions-row cart-actions-row-empty">
+                      <button className="action-btn secondary cart-btn-empty-grow" onClick={showVirtualTicket}>
+                        <Receipt size={20} style={{ marginRight: '0.5rem' }} />
                         {t('cart.viewTickets')}
-                    </button>
+                      </button>
+                      <button
+                        type="button"
+                        className="action-btn action-btn-print-catalog"
+                        onClick={handlePrintProductCatalog}
+                        disabled={isPrintingCatalog || filteredProducts.length === 0}
+                        title="Imprimir lista de productos"
+                      >
+                        {isPrintingCatalog ? (
+                          <RefreshCw size={20} className="spinner" />
+                        ) : (
+                          <Printer size={20} />
+                        )}
+                        <span className="cart-print-label">Imprimir</span>
+                      </button>
+                    </div>
                     )}
                   </div>
                 </div>
@@ -2006,14 +2492,45 @@ function App() {
         <CheckoutModal
           isOpen={isCheckoutOpen}
           onClose={() => setIsCheckoutOpen(false)}
-          total={cart.reduce((sum, item) => sum + item.itemTotal, 0) * 1.16}
+          total={cartTax.total}
           onComplete={handleCheckoutComplete}
         />
+
+        {/* Modal Error de Impresión */}
+        {printErrorModal && (
+          <div className="modal-overlay" onClick={() => setPrintErrorModal(null)}>
+            <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+              <div className="modal-header">
+                <h3>Error al imprimir ticket</h3>
+                <button className="close-btn" onClick={() => setPrintErrorModal(null)}>
+                  <X size={20} />
+                </button>
+              </div>
+              <div className="modal-body">
+                <p style={{ color: 'var(--bs-danger, #dc3545)', marginBottom: '0.5rem' }}>
+                  No se pudo imprimir el ticket.
+                </p>
+                <p style={{ fontSize: '0.875rem', color: 'var(--bs-dark-text-muted)' }}>
+                  {printErrorModal.message}
+                </p>
+                <p style={{ fontSize: '0.75rem', color: 'var(--bs-dark-text-muted)', marginTop: '1rem' }}>
+                  Si la térmica falla, debería abrirse una ventana con el ticket y el cuadro de impresión del sistema (puedes elegir <strong>Guardar como PDF</strong> u otra impresora). Comprueba que no estén bloqueadas las ventanas emergentes. También puedes revisar Configuración → Impresora de Tickets.
+                </p>
+              </div>
+              <div className="modal-footer">
+                <button className="btn-primary" onClick={() => setPrintErrorModal(null)}>
+                  Entendido
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Sales Reports Modal */}
         <SalesReports
           isOpen={isReportsOpen}
           onClose={() => setIsReportsOpen(false)}
+          onRecoverSaleToCart={handleRecoverSaleFromReports}
         />
 
         {/* Product Management Modal - solo visible en sección Productos e Inventario */}
@@ -2074,7 +2591,7 @@ function App() {
         )}
 
         {/* Kitchen Modal - Only show for restaurant or coffee shop */}
-        {isKitchenOpen && isRestaurantOrCafe && (
+        {isKitchenOpen && showKitchenModule && (
           <Kitchen
             isOpen={isKitchenOpen}
             onClose={() => {
@@ -2095,6 +2612,7 @@ function App() {
           paymentMethod={lastSaleData?.paymentMethod || 'cash'}
           change={lastSaleData?.change}
           customerInfo={lastSaleData?.customerInfo}
+          onPrintError={(message) => setPrintErrorModal({ message })}
         />
         
         {/* Toast Notifications */}

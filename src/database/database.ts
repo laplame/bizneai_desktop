@@ -1,6 +1,17 @@
 import Database from 'better-sqlite3';
 import path from 'path';
-import { app } from 'electron';
+
+function resolveDbDir(): string {
+  const env = process.env.BIZNEAI_USER_DATA?.trim();
+  if (env) return env;
+  if (process.env.NODE_ENV === 'development') return process.cwd();
+  return process.cwd();
+}
+
+/** Ruta del fichero bizneai.db (legado) para metadatos / consola local. */
+export function getLegacyBizneaiDbPath(): string {
+  return path.join(resolveDbDir(), 'bizneai.db');
+}
 
 // Tipos para la base de datos
 export interface Product {
@@ -69,14 +80,7 @@ class DatabaseManager {
   private dbPath: string;
 
   constructor() {
-    // En desarrollo, usar una ruta local
-    if (process.env.NODE_ENV === 'development') {
-      this.dbPath = path.join(process.cwd(), 'bizneai.db');
-    } else {
-      // En producción, usar la carpeta de datos de la app
-      const userDataPath = app?.getPath('userData') || process.cwd();
-      this.dbPath = path.join(userDataPath, 'bizneai.db');
-    }
+    this.dbPath = path.join(resolveDbDir(), 'bizneai.db');
   }
 
   initialize(): void {
@@ -236,6 +240,51 @@ class DatabaseManager {
         FOREIGN KEY (block_id) REFERENCES daily_blocks (id) ON DELETE CASCADE,
         FOREIGN KEY (transaction_id) REFERENCES transactions (id) ON DELETE CASCADE
       )
+    `);
+
+    this.db.exec(`
+      CREATE VIEW IF NOT EXISTS vista_ventas AS
+      SELECT
+        s.id,
+        s.store_id AS tienda,
+        s.client_id AS cliente_id,
+        s.total_amount AS total,
+        s.payment_method AS metodo_pago,
+        s.customer_info AS info_cliente,
+        s.status AS estado,
+        s.created_at AS fecha,
+        (SELECT COUNT(*) FROM sale_items si WHERE si.sale_id = s.id) AS lineas
+      FROM sales s;
+
+      CREATE VIEW IF NOT EXISTS vista_clientes AS
+      SELECT
+        id,
+        name AS nombre,
+        email,
+        phone AS telefono,
+        address AS direccion,
+        membership_level AS nivel,
+        total_purchases AS compras_acumuladas,
+        last_purchase AS ultima_compra,
+        created_at AS alta
+      FROM customers;
+
+      CREATE VIEW IF NOT EXISTS vista_historial AS
+      SELECT
+        'venta' AS categoria,
+        CAST(s.id AS TEXT) AS ref_id,
+        s.store_id AS tienda,
+        printf('$%.2f', s.total_amount) || ' · ' || s.payment_method AS descripcion,
+        s.created_at AS fecha
+      FROM sales s
+      UNION ALL
+      SELECT
+        'merkle' AS categoria,
+        t.id AS ref_id,
+        '' AS tienda,
+        t.action || ' venta#' || CAST(t.sale_id AS TEXT) AS descripcion,
+        COALESCE(t.timestamp, t.created_at) AS fecha
+      FROM transactions t;
     `);
 
     console.log('Database tables created successfully');
@@ -679,6 +728,12 @@ class DatabaseManager {
     if (!row) return undefined;
     
     return this.getBlockById(row.id);
+  }
+
+  /** Instancia better-sqlite3 subyacente (p. ej. consola SQL local solo lectura). */
+  getRawSqliteDb(): Database.Database {
+    if (!this.db) throw new Error('Database not initialized');
+    return this.db;
   }
 
   // Método para cerrar la base de datos

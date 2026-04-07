@@ -88,9 +88,8 @@ const CheckoutModal = ({ isOpen, onClose, total, onComplete }: CheckoutModalProp
   const [mixedCardCvv, setMixedCardCvv] = useState('');
   const [mixedCryptoCoupon, setMixedCryptoCoupon] = useState('');
 
-  const subtotal = total;
-  const tax = total * 0.16;
-  const finalTotal = subtotal + tax;
+  /** Total a cobrar (igual al resumen del carrito; el IVA ya está aplicado en el padre). */
+  const finalTotal = total;
   const change = parseFloat(cashAmount) - finalTotal;
 
   const wasOpenRef = useRef(false);

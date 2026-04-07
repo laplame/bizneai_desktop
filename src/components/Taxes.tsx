@@ -21,6 +21,8 @@ import {
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { getWhatsAppUrl } from '../constants/contact';
+import { storeAPI } from '../api/store';
+import { scheduleMirrorKeyToSqlite } from '../services/posPersistService';
 
 interface FiscalConfig {
   rfc: string;
@@ -149,13 +151,14 @@ const Taxes: React.FC<TaxesProps> = ({ isOpen, onClose }) => {
     
     setTimeout(() => {
       localStorage.setItem('bizneai-tax-rate', rate.toString());
+      scheduleMirrorKeyToSqlite('bizneai-tax-rate');
+      void storeAPI.updateConfig({ taxRate: rate });
       setTaxRate(rate);
       setNewTaxRate('');
       setIsSavingRate(false);
       toast.success(`Tasa de impuesto guardada: ${rate}%`);
-      
-      // Disparar evento para actualizar en otros componentes
       window.dispatchEvent(new CustomEvent('tax-rate-updated', { detail: { rate } }));
+      window.dispatchEvent(new CustomEvent('store-config-updated'));
     }, 500);
   };
 
@@ -189,6 +192,7 @@ const Taxes: React.FC<TaxesProps> = ({ isOpen, onClose }) => {
     }
     
     localStorage.setItem('bizneai-fiscal-config', JSON.stringify(fiscalConfig));
+    scheduleMirrorKeyToSqlite('bizneai-fiscal-config');
     setIsConfigModalOpen(false);
     setIsEditingConfig(false);
     toast.success('Configuración fiscal guardada');

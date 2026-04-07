@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { computeCartTaxBreakdown, loadTaxSettings } from '../utils/taxSettings';
 import { 
   Receipt, 
   CheckCircle,
@@ -163,9 +164,15 @@ const TicketViewer = ({ ticketId }: TicketViewerProps) => {
     );
   }
 
-  const subtotal = ticketData.items.reduce((sum, item) => sum + (item.product.price * item.quantity), 0);
-  const tax = subtotal * 0.16;
-  const finalTotal = subtotal + tax;
+  const lineSum = ticketData.items.reduce(
+    (sum, item) => sum + item.product.price * item.quantity,
+    0
+  );
+  const taxSettings = loadTaxSettings();
+  const { subtotalExclTax, taxAmount, total: finalTotal } = computeCartTaxBreakdown(
+    lineSum,
+    taxSettings
+  );
 
   return (
     <div className="ticket-viewer">
@@ -267,11 +274,11 @@ const TicketViewer = ({ ticketId }: TicketViewerProps) => {
         <div className="totals-section">
           <div className="total-row">
             <span>Subtotal:</span>
-            <span>${subtotal.toFixed(2)}</span>
+            <span>${subtotalExclTax.toFixed(2)}</span>
           </div>
           <div className="total-row">
-            <span>IVA (16%):</span>
-            <span>${tax.toFixed(2)}</span>
+            <span>IVA ({taxSettings.taxRate}%):</span>
+            <span>${taxAmount.toFixed(2)}</span>
           </div>
           <div className="total-row total-final">
             <span>Total:</span>

@@ -86,6 +86,10 @@ export interface Product {
   };
   tags?: string[];
   metadata?: Record<string, any>;
+  /** Precio con impuesto incluido para este SKU (opcional; si no viene, aplica regla de tienda). */
+  priceIncludesTax?: boolean;
+  /** Producto exento de impuesto. */
+  taxExempt?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -112,6 +116,8 @@ export interface CreateProductRequest {
   };
   tags?: string[];
   metadata?: Record<string, any>;
+  priceIncludesTax?: boolean;
+  taxExempt?: boolean;
 }
 
 export interface UpdateProductRequest extends Partial<CreateProductRequest> {
@@ -192,6 +198,8 @@ export interface ProductUploadFormData {
   };
   tags?: string[];
   metadata?: Record<string, any>;
+  priceIncludesTax?: boolean;
+  taxExempt?: boolean;
 }
 
 // ===== KITCHEN TYPES =====

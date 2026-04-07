@@ -3,22 +3,21 @@ import { z } from 'zod';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
-import { fileURLToPath } from 'url';
+import { ensureBizneaiDataDir } from '../dataPaths';
 
 const router = express.Router();
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 // Ensure upload directories exist
 const createUploadDirectories = () => {
+  const root = ensureBizneaiDataDir();
   const uploadDirs = [
-    path.join(__dirname, '../../uploads'),
-    path.join(__dirname, '../../uploads/images'),
-    path.join(__dirname, '../../uploads/products'),
-    path.join(__dirname, '../../public/images')
+    path.join(root, 'uploads'),
+    path.join(root, 'uploads/images'),
+    path.join(root, 'uploads/products'),
+    path.join(process.cwd(), 'public', 'images'),
   ];
-  
-  uploadDirs.forEach(dir => {
+
+  uploadDirs.forEach((dir) => {
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
@@ -30,9 +29,7 @@ createUploadDirectories();
 // Multer configuration for file uploads
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    // Dual storage: private + public
-    const publicDir = path.join(__dirname, '../../public/images');
-    const privateDir = path.join(__dirname, '../../uploads/products');
+    const privateDir = path.join(ensureBizneaiDataDir(), 'uploads', 'products');
     cb(null, privateDir);
   },
   filename: (req, file, cb) => {
@@ -334,7 +331,7 @@ router.delete('/image/:filename', async (req, res) => {
   try {
     const { filename } = z.object({ filename: z.string() }).parse(req.params);
     
-    const filePath = path.join(__dirname, '../../uploads/products', filename);
+    const filePath = path.join(ensureBizneaiDataDir(), 'uploads', 'products', filename);
     
     if (fs.existsSync(filePath)) {
       fs.unlinkSync(filePath);

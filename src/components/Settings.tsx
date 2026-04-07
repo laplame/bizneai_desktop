@@ -51,7 +51,11 @@ import {
   Activity,
   Zap,
   X,
-  MessageCircle
+  MessageCircle,
+  Printer,
+  User,
+  Users,
+  Terminal
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { storeAPI } from '../api/store';
@@ -59,11 +63,38 @@ import { API_CONFIG, apiRequest, handleApiError } from '../config/api';
 import { StoreConfig } from '../types/store';
 import { useStore } from '../contexts/StoreContext';
 import { getStoreTypes, checkStoreTypesForUpdates, getStoreTypeLabel } from '../data/storeTypes';
-import { mapMcpProductToLocal } from '../utils/shopIdHelper';
+import { mapMcpProductToLocal, mergeProductsFromServerPreserveImages } from '../utils/shopIdHelper';
 import { setLastSyncTime, isSyncDue } from '../utils/syncService';
 import { getWhatsAppUrl } from '../constants/contact';
+import {
+  getReceiptPrintConfig,
+  setReceiptPrintConfig,
+  isElectron,
+  openReceiptPrintPreviewDialog,
+  printReceiptTestThermal,
+  type ReceiptPageSize,
+  type ReceiptPrintConfig,
+} from '../services/receiptPrintService';
+import { syncRolesToServer } from '../api/roles';
+import RolesScreenLockPanel from './RolesScreenLockPanel';
 import { getVersionDisplay, BUILD_TIMESTAMP } from '../lib/buildInfo';
 import i18n from '../i18n';
+import type { TaxSettings } from '../utils/taxSettings';
+import {
+  flushMirroredKeysToServer,
+  initPosPersistence,
+  scheduleMirrorKeyToSqlite,
+} from '../services/posPersistService';
+import { syncProductImagesToLocalDisk } from '../services/productImageLocalCache';
+import {
+  setConfigAccessPassword,
+  setConfigModifyPassword,
+  isConfigurationModifyUnlocked,
+  unlockConfigurationModifyWithPassword,
+  validateConfigModifyPassword,
+  getConfigAccessPassword,
+  getConfigModifyPassword,
+} from '../services/configPasswords';
 
 interface SettingsProps {
   isSetupMode?: boolean;
@@ -90,6 +121,11 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
   const { setStoreIdentifiers } = useStore();
   // State for active section
   const [activeSection, setActiveSection] = useState<string>('store-info');
+
+  // Receipt printer config (solo relevante en Electron)
+  const [receiptPrintConfig, setReceiptPrintConfigState] = useState<ReceiptPrintConfig>(() =>
+    getReceiptPrintConfig()
+  );
   
   // Obtener tipos de tienda disponibles
   const storeTypes = getStoreTypes('es');
@@ -128,7 +164,7 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
   });
 
   // Tax Settings
-  const [taxSettings, setTaxSettings] = useState({
+  const [taxSettings, setTaxSettings] = useState<TaxSettings>({
     taxRate: 16,
     taxCalculationMethod: 'exclusive',
     taxInclusive: false
@@ -173,12 +209,47 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
   const [isLoading, setIsLoading] = useState(false);
   const [showPasscode, setShowPasscode] = useState(false);
   const [kitchenEnabled, setKitchenEnabled] = useState(false);
-  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(['store-info']));
+  const [expandedSections, setExpandedSections] = useState<Set<string>>(
+    () => new Set(['store-info', 'config-passwords', 'roles-screen-lock'])
+  );
   const [apiConnectionStatus, setApiConnectionStatus] = useState<{
     connected: boolean;
     responseTime: number | null;
   }>({ connected: false, responseTime: null });
   const [showContactDeveloperModal, setShowContactDeveloperModal] = useState(false);
+
+  const [modifyUnlocked, setModifyUnlocked] = useState(() =>
+    isSetupMode ? true : isConfigurationModifyUnlocked()
+  );
+  const [showModifyUnlockModal, setShowModifyUnlockModal] = useState(false);
+  const [modifyUnlockPassword, setModifyUnlockPassword] = useState('');
+  const [modifyUnlockUsername, setModifyUnlockUsername] = useState('');
+  const [modifyUnlockError, setModifyUnlockError] = useState(false);
+  const [newAccessPassword, setNewAccessPassword] = useState('');
+  const [newModifyPassword, setNewModifyPassword] = useState('');
+  const [confirmModifyPassword, setConfirmModifyPassword] = useState('');
+  /** Si la edición global está bloqueada, aquí se valida la contraseña de admin actual para poder guardar cambios de contraseñas. */
+  const [currentAdminForPasswordChange, setCurrentAdminForPasswordChange] = useState('');
+  /** Junto con la anterior: usuario `admin` + contraseña `admin` como respaldo fijo. */
+  const [currentAdminUsernameForPasswordChange, setCurrentAdminUsernameForPasswordChange] = useState('');
+  const [showPwAccessInput, setShowPwAccessInput] = useState(false);
+  const [showPwModifyNew, setShowPwModifyNew] = useState(false);
+  const [showPwModifyConfirm, setShowPwModifyConfirm] = useState(false);
+  const [showPwCurrentAdmin, setShowPwCurrentAdmin] = useState(false);
+  /** Solo con edición desbloqueada o setup: ver texto plano de lo guardado en el equipo (uso puntual). */
+  const [showStoredPasswordsReference, setShowStoredPasswordsReference] = useState(false);
+
+  const settingsLocked = !isSetupMode && !modifyUnlocked;
+
+  useEffect(() => {
+    if (isSetupMode) setModifyUnlocked(true);
+  }, [isSetupMode]);
+
+  useEffect(() => {
+    const onRevoke = () => setModifyUnlocked(false);
+    window.addEventListener('bizneai-config-modify-revoked', onRevoke);
+    return () => window.removeEventListener('bizneai-config-modify-revoked', onRevoke);
+  }, []);
 
   // Cargar idioma guardado al montar
   useEffect(() => {
@@ -288,8 +359,23 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
   // Save server configuration to localStorage
   const saveServerConfig = (config: typeof serverConfig) => {
     try {
+      let prev: { shopId?: string; mcpUrl?: string } = {};
+      try {
+        const raw = localStorage.getItem('bizneai-server-config');
+        if (raw) prev = JSON.parse(raw);
+      } catch {
+        /* ignore */
+      }
+      const serverIdsChanged =
+        String(prev.shopId ?? '') !== String(config.shopId ?? '') ||
+        String(prev.mcpUrl ?? '') !== String(config.mcpUrl ?? '');
+
       localStorage.setItem('bizneai-server-config', JSON.stringify(config));
+      scheduleMirrorKeyToSqlite('bizneai-server-config');
       setServerConfig(config);
+      if (serverIdsChanged) {
+        window.dispatchEvent(new CustomEvent('store-config-updated'));
+      }
     } catch (error) {
       console.error('Error saving server config:', error);
     }
@@ -337,6 +423,7 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
             if (shopData.kitchenEnabled !== undefined) {
               storeConfig.kitchenEnabled = !!shopData.kitchenEnabled;
               localStorage.setItem('bizneai-store-config', JSON.stringify(storeConfig));
+              scheduleMirrorKeyToSqlite('bizneai-store-config');
               window.dispatchEvent(new Event('store-config-updated'));
             }
           } catch (e) {
@@ -374,6 +461,7 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
                 updated.kitchenEnabled = !!shopData.kitchenEnabled;
               }
               localStorage.setItem('bizneai-server-config', JSON.stringify(updated));
+              scheduleMirrorKeyToSqlite('bizneai-server-config');
             }
           } catch (configError) {
             console.warn('Could not persist server config:', configError);
@@ -381,10 +469,22 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
 
           // Guardar productos reales del MCP para que POS no caiga en catálogo de muestra
           if (Array.isArray(mcpProducts) && mcpProducts.length > 0) {
+            let savedParsed: unknown[] = [];
+            try {
+              const raw = localStorage.getItem('bizneai-products');
+              if (raw) {
+                const p = JSON.parse(raw);
+                if (Array.isArray(p)) savedParsed = p;
+              }
+            } catch {
+              /* ignore */
+            }
             const mappedProducts = mcpProducts.map((product: any, index: number) =>
               mapMcpProductToLocal(product, index)
             );
-            localStorage.setItem('bizneai-products', JSON.stringify(mappedProducts));
+            const merged = mergeProductsFromServerPreserveImages(savedParsed, mappedProducts);
+            const withLocalImages = await syncProductImagesToLocalDisk(merged);
+            localStorage.setItem('bizneai-products', JSON.stringify(withLocalImages));
             setLastSyncTime();
             window.dispatchEvent(new Event('products-updated'));
           }
@@ -533,6 +633,24 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
             storeName: config.storeName 
           });
           localStorage.setItem('bizneai-store-type', config.storeType);
+          scheduleMirrorKeyToSqlite('bizneai-store-type');
+        }
+
+        if (typeof config.taxRate === 'number' && !Number.isNaN(config.taxRate)) {
+          setTaxSettings({
+            taxRate: config.taxRate,
+            taxCalculationMethod:
+              config.taxCalculationMethod === 'inclusive' ? 'inclusive' : 'exclusive',
+            taxInclusive: !!config.taxInclusive,
+          });
+        } else {
+          const legacy = localStorage.getItem('bizneai-tax-rate');
+          if (legacy != null) {
+            const r = parseFloat(legacy);
+            if (!Number.isNaN(r)) {
+              setTaxSettings((prev) => ({ ...prev, taxRate: r }));
+            }
+          }
         }
       }
     } catch (error) {
@@ -555,6 +673,21 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
     }
   };
 
+  const syncTaxToBackend = (next: {
+    taxRate: number;
+    taxCalculationMethod: 'exclusive' | 'inclusive';
+    taxInclusive: boolean;
+  }) => {
+    void storeAPI.updateConfig({
+      taxRate: next.taxRate,
+      taxCalculationMethod: next.taxCalculationMethod,
+      taxInclusive: next.taxInclusive,
+    });
+    localStorage.setItem('bizneai-tax-rate', String(next.taxRate));
+    scheduleMirrorKeyToSqlite('bizneai-tax-rate');
+    window.dispatchEvent(new CustomEvent('store-config-updated'));
+  };
+
   const toggleSection = (section: string) => {
     setExpandedSections(prev => {
       const newSet = new Set(prev);
@@ -568,6 +701,10 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
   };
 
   const handleSave = async () => {
+    if (settingsLocked) {
+      toast.error('Desbloquea la edición con la contraseña de administrador.');
+      return;
+    }
     setIsLoading(true);
     try {
       const config: StoreConfig = {
@@ -584,7 +721,11 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
         crypto: paymentSettings.cryptoEnabled,
         acceptedCryptocurrencies: Object.keys(paymentSettings.cryptoAddresses).filter(
           key => paymentSettings.cryptoAddresses[key as keyof CryptoConfig]
-        )
+        ),
+        taxRate: taxSettings.taxRate,
+        taxCalculationMethod:
+          taxSettings.taxCalculationMethod === 'inclusive' ? 'inclusive' : 'exclusive',
+        taxInclusive: taxSettings.taxInclusive,
       };
 
       // Guardar primero en localStorage (funciona sin conexión)
@@ -592,12 +733,22 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
         localStorage.setItem('bizneai-store-config', JSON.stringify(config));
         localStorage.setItem('bizneai-setup-complete', 'true');
         localStorage.setItem('bizneai-store-type', config.storeType);
-        
+        scheduleMirrorKeyToSqlite('bizneai-store-config');
+        scheduleMirrorKeyToSqlite('bizneai-setup-complete');
+        scheduleMirrorKeyToSqlite('bizneai-store-type');
+
         // Actualizar StoreContext con el storeType
         setStoreIdentifiers({ 
           storeType: config.storeType,
           storeName: config.storeName 
         });
+
+        void (async () => {
+          const persisted = await initPosPersistence();
+          if (persisted.ok) {
+            await flushMirroredKeysToServer();
+          }
+        })();
         
         // Intentar sincronizar con servidor (opcional, no bloquea si falla)
         try {
@@ -670,6 +821,32 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
       }
     } catch (error) {
       toast.error('Error al sincronizar con el servidor');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleSyncRoles = async () => {
+    if (!serverConfig.shopId) {
+      toast.error('Configura el Shop ID antes de sincronizar roles');
+      return;
+    }
+    setIsLoading(true);
+    try {
+      const rolesRaw = localStorage.getItem('bizneai-roles');
+      const roles = rolesRaw ? JSON.parse(rolesRaw) : [];
+      const result = await syncRolesToServer({
+        shopId: serverConfig.shopId,
+        roles: Array.isArray(roles) ? roles : [],
+        timestamp: new Date().toISOString(),
+      });
+      if (result.success) {
+        toast.success(result.message || 'Roles sincronizados correctamente');
+      } else {
+        toast.error(result.error || 'Error al sincronizar roles');
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Error al sincronizar roles');
     } finally {
       setIsLoading(false);
     }
@@ -818,13 +995,86 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
     setShowContactDeveloperModal(false);
   };
 
+  const handleSaveConfigPasswords = () => {
+    const hasAccessChange = newAccessPassword.trim().length > 0;
+    const hasModifyChange =
+      newModifyPassword.trim().length > 0 || confirmModifyPassword.trim().length > 0;
+
+    if (!hasAccessChange && !hasModifyChange) {
+      toast.error('Indica al menos una contraseña nueva o cambia acceso/administrador');
+      return;
+    }
+
+    if (hasModifyChange) {
+      if (newModifyPassword !== confirmModifyPassword) {
+        toast.error('Las contraseñas de administrador nuevas no coinciden');
+        return;
+      }
+      if (!newModifyPassword.trim()) {
+        toast.error('Completa la nueva contraseña de administrador');
+        return;
+      }
+    }
+
+    if (settingsLocked) {
+      const cur = currentAdminForPasswordChange.trim();
+      if (!cur) {
+        toast.error('Escribe la contraseña de administrador actual (campo inferior) para autorizar el cambio');
+        return;
+      }
+      if (!validateConfigModifyPassword(cur, currentAdminUsernameForPasswordChange)) {
+        toast.error('Contraseña de administrador actual incorrecta');
+        return;
+      }
+    }
+
+    if (hasAccessChange) {
+      setConfigAccessPassword(newAccessPassword.trim());
+    }
+    if (hasModifyChange) {
+      setConfigModifyPassword(newModifyPassword.trim());
+    }
+
+    if (settingsLocked) {
+      if (hasModifyChange) {
+        unlockConfigurationModifyWithPassword(newModifyPassword.trim());
+      } else {
+        unlockConfigurationModifyWithPassword(
+          currentAdminForPasswordChange.trim(),
+          currentAdminUsernameForPasswordChange
+        );
+      }
+      setModifyUnlocked(true);
+      setCurrentAdminForPasswordChange('');
+      setCurrentAdminUsernameForPasswordChange('');
+      toast.success('Contraseñas actualizadas. Edición desbloqueada para el resto de la sesión.');
+    } else {
+      if (hasModifyChange) {
+        unlockConfigurationModifyWithPassword(newModifyPassword.trim());
+      }
+      toast.success('Contraseñas actualizadas');
+    }
+
+    setNewAccessPassword('');
+    setNewModifyPassword('');
+    setConfirmModifyPassword('');
+  };
+
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
     toast.success('Copiado al portapapeles');
   };
 
-  const renderSection = (id: string, title: string, icon: React.ReactNode, content: React.ReactNode) => {
+  const renderSection = (
+    id: string,
+    title: string,
+    icon: React.ReactNode,
+    content: React.ReactNode,
+    options?: { alwaysInteractive?: boolean }
+  ) => {
     const isExpanded = expandedSections.has(id);
+    const contentInert =
+      options?.alwaysInteractive ? undefined : settingsLocked ? true : undefined;
     return (
       <div className="settings-section-card">
         <div className="settings-section-header" onClick={() => toggleSection(id)}>
@@ -835,7 +1085,7 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
           {isExpanded ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
         </div>
         {isExpanded && (
-          <div className="settings-section-content">
+          <div inert={contentInert} className="settings-section-content">
             {content}
           </div>
         )}
@@ -855,7 +1105,64 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
         )}
       </div>
 
+      {isElectron() && (
+        <div style={{ marginBottom: '1rem' }}>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => window.electronAPI?.openDbConsole?.()}
+          >
+            <Terminal size={18} />
+            Abrir consola BD (ventana aparte)
+          </button>
+          <p style={{ margin: '0.35rem 0 0', fontSize: '0.8rem', color: 'var(--bs-dark-text-muted)' }}>
+            SQLite en solo lectura. La ventana se puede minimizar desde la barra de título.
+          </p>
+        </div>
+      )}
+
+      {!isSetupMode && !modifyUnlocked && (
+        <div
+          className="settings-unlock-banner"
+          style={{
+            marginBottom: '1rem',
+            padding: '1rem 1.25rem',
+            borderRadius: 'var(--bs-radius)',
+            border: '1px solid var(--bs-dark-border)',
+            background: 'var(--bs-dark-surface)',
+          }}
+        >
+          <p style={{ margin: '0 0 0.75rem', color: 'var(--bs-dark-text)' }}>
+            <strong>Modo solo lectura</strong> para la mayoría de opciones (tienda, impuestos, etc.). Siguen editables:{' '}
+            <strong>Contraseñas de configuración</strong>, <strong>Roles y bloqueo de pantalla</strong> (PIN). Para el
+            resto, pulsa <strong>Desbloquear edición</strong> o indica la contraseña de administrador en Contraseñas.
+            Respaldo: usuario <strong>admin</strong> y contraseña <strong>admin</strong>.
+          </p>
+          <button type="button" className="btn-primary" onClick={() => setShowModifyUnlockModal(true)}>
+            <Unlock size={18} />
+            Desbloquear edición
+          </button>
+        </div>
+      )}
+      {!isSetupMode && modifyUnlocked && (
+        <div
+          style={{
+            marginBottom: '1rem',
+            padding: '0.75rem 1.25rem',
+            borderRadius: 'var(--bs-radius)',
+            border: '1px solid rgba(40, 167, 69, 0.35)',
+            background: 'rgba(40, 167, 69, 0.08)',
+            fontSize: '0.9rem',
+            color: 'var(--bs-dark-text)',
+          }}
+        >
+          Edición desbloqueada en esta sesión. Se volverá a pedir la contraseña de administrador al bloquear la
+          pantalla o cerrar la sesión.
+        </div>
+      )}
+
       {/* Server Sync Status */}
+      <div inert={settingsLocked ? true : undefined}>
       <div className="settings-sync-status">
         <div className="sync-status-info">
           <Server size={20} />
@@ -940,6 +1247,10 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
             <RefreshCw size={16} />
             Sincronizar con Servidor
           </button>
+          <button onClick={handleSyncRoles} disabled={isLoading || !serverConfig.shopId} className="btn-secondary" title="Sincronizar roles y usuarios de la tienda">
+            <User size={16} />
+            Sincronizar Roles
+          </button>
           <button onClick={handleTestConnection} disabled={isLoading} className="btn-secondary">
             <TestTube size={16} />
             Probar Conexión
@@ -994,6 +1305,7 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
             <span>Tiempo de respuesta: {apiConnectionStatus.responseTime}ms</span>
           </div>
         )}
+      </div>
       </div>
 
       {/* Store Information */}
@@ -1154,6 +1466,7 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
                   const lang = e.target.value as 'es' | 'en';
                   setBusinessSettings(prev => ({ ...prev, language: lang }));
                   localStorage.setItem('bizneai-language', lang);
+                  scheduleMirrorKeyToSqlite('bizneai-language');
                   i18n.changeLanguage(lang);
                 }}
               >
@@ -1284,7 +1597,14 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
               <input
                 type="number"
                 value={taxSettings.taxRate}
-                onChange={(e) => setTaxSettings(prev => ({ ...prev, taxRate: parseFloat(e.target.value) || 0 }))}
+                onChange={(e) => {
+                  const taxRate = parseFloat(e.target.value) || 0;
+                  setTaxSettings((prev) => {
+                    const next = { ...prev, taxRate };
+                    syncTaxToBackend(next);
+                    return next;
+                  });
+                }}
                 min="0"
                 max="100"
                 step="0.1"
@@ -1294,7 +1614,18 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
               <label>Método de Cálculo</label>
               <select
                 value={taxSettings.taxCalculationMethod}
-                onChange={(e) => setTaxSettings(prev => ({ ...prev, taxCalculationMethod: e.target.value }))}
+                onChange={(e) => {
+                  const taxCalculationMethod = e.target.value as 'exclusive' | 'inclusive';
+                  setTaxSettings((prev) => {
+                    const next = {
+                      ...prev,
+                      taxCalculationMethod,
+                      taxInclusive: taxCalculationMethod === 'inclusive',
+                    };
+                    syncTaxToBackend(next);
+                    return next;
+                  });
+                }}
               >
                 <option value="exclusive">Impuesto excluido</option>
                 <option value="inclusive">Impuesto incluido</option>
@@ -1306,7 +1637,17 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
               <input
                 type="checkbox"
                 checked={taxSettings.taxInclusive}
-                onChange={(e) => setTaxSettings(prev => ({ ...prev, taxInclusive: e.target.checked }))}
+                onChange={(e) => {
+                  const taxInclusive = e.target.checked;
+                  setTaxSettings((prev) => {
+                    const taxCalculationMethod: TaxSettings['taxCalculationMethod'] = taxInclusive
+                      ? 'inclusive'
+                      : 'exclusive';
+                    const next = { ...prev, taxInclusive, taxCalculationMethod };
+                    syncTaxToBackend(next);
+                    return next;
+                  });
+                }}
               />
               <span>Precios incluyen impuesto</span>
             </label>
@@ -1360,6 +1701,212 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
       )}
 
       {/* Security Settings */}
+      {renderSection('receipt-printer', 'Impresora de Tickets', <Printer size={20} />,
+        <div className="settings-form">
+          {!isElectron() ? (
+            <>
+              <p style={{ color: 'var(--bs-dark-text-muted)', fontSize: '0.875rem' }}>
+                La impresión <strong>térmica directa</strong> (PosPrinter) está disponible solo en la app de escritorio.
+                Puedes probar el aspecto del ticket y usar <strong>PDF</strong> o cualquier impresora desde el botón de
+                abajo.
+              </p>
+              <div className="form-group">
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => {
+                    const r = openReceiptPrintPreviewDialog();
+                    if (r.success) {
+                      toast.success('Vista previa: elige impresora o Guardar como PDF');
+                    } else {
+                      toast.error(r.error || 'No se pudo abrir');
+                    }
+                  }}
+                >
+                  <Printer size={16} style={{ marginRight: 6, verticalAlign: 'middle' }} />
+                  Cuadro de impresión (PDF / elegir impresora)
+                </button>
+                <small className="form-hint" style={{ display: 'block', marginTop: '0.5rem' }}>
+                  Abre un ticket de prueba y el diálogo de impresión del navegador.
+                </small>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="form-group">
+                <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={receiptPrintConfig.enabled}
+                    onChange={(e) => {
+                      const v = e.target.checked;
+                      setReceiptPrintConfig({ enabled: v });
+                      setReceiptPrintConfigState((prev) => ({ ...prev, enabled: v }));
+                      toast.success(v ? 'Impresión automática activada' : 'Impresión automática desactivada');
+                    }}
+                  />
+                  Impresión automática al completar venta
+                </label>
+                <small className="form-hint">Imprime el ticket en la impresora térmica cada vez que se complete una venta.</small>
+              </div>
+              <div className="form-group">
+                <label className="form-label">Ancho del papel</label>
+                <select
+                  className="form-control"
+                  value={receiptPrintConfig.pageSize}
+                  onChange={(e) => {
+                    const v = e.target.value as ReceiptPageSize;
+                    setReceiptPrintConfig({ pageSize: v });
+                    setReceiptPrintConfigState((prev) => ({ ...prev, pageSize: v }));
+                    toast.success(`Papel configurado: ${v}`);
+                  }}
+                >
+                  <option value="57mm">57 mm</option>
+                  <option value="58mm">58 mm</option>
+                  <option value="80mm">80 mm</option>
+                </select>
+                <small className="form-hint">Selecciona el ancho de tu impresora térmica.</small>
+              </div>
+              <div className="form-group">
+                <label className="form-label">Nombre en ticket (opcional)</label>
+                <input
+                  type="text"
+                  className="form-control"
+                  placeholder="BizneAI POS"
+                  value={receiptPrintConfig.storeName ?? ''}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setReceiptPrintConfigState((prev) => ({ ...prev, storeName: v || undefined }));
+                  }}
+                  onBlur={(e) => {
+                    setReceiptPrintConfig({ storeName: e.target.value.trim() || undefined });
+                  }}
+                />
+                <small className="form-hint">Texto que aparece en el encabezado del ticket.</small>
+              </div>
+              <div className="form-group">
+                <label className="form-label">Impresora térmica en el sistema (opcional)</label>
+                <input
+                  type="text"
+                  className="form-control"
+                  placeholder="Nombre exacto como en Ajustes del sistema → Impresoras"
+                  value={receiptPrintConfig.printerName ?? ''}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setReceiptPrintConfigState((prev) => ({ ...prev, printerName: v || undefined }));
+                  }}
+                  onBlur={(e) => {
+                    const t = e.target.value.trim();
+                    setReceiptPrintConfig({ printerName: t || undefined });
+                  }}
+                />
+                <small className="form-hint">
+                  Si lo dejas vacío, PosPrinter usa la <strong>impresora predeterminada</strong>. Si la térmica no es la
+                  predeterminada, escribe aquí el nombre exacto (evita timeouts si apuntaba a otra impresora).
+                </small>
+              </div>
+              <div className="form-group">
+                <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={receiptPrintConfig.showTicketCopyType !== false}
+                    onChange={(e) => {
+                      const v = e.target.checked;
+                      setReceiptPrintConfig({ showTicketCopyType: v });
+                      setReceiptPrintConfigState((prev) => ({ ...prev, showTicketCopyType: v }));
+                      toast.success(v ? 'Leyenda Original/Copia activada' : 'Leyenda Original/Copia desactivada');
+                    }}
+                  />
+                  Leyenda <strong>Original</strong> / <strong>Copia</strong> en tickets de venta (recomendado en 80&nbsp;mm)
+                </label>
+                <small className="form-hint">
+                  La primera impresión térmica de cada venta muestra el texto de &quot;original&quot;; las reimpresiones
+                  del mismo ticket muestran &quot;copia&quot;. Las listas de productos no usan esta leyenda.
+                </small>
+              </div>
+              <div className="form-row">
+                <div className="form-group" style={{ flex: 1 }}>
+                  <label className="form-label">Texto primera impresión</label>
+                  <input
+                    type="text"
+                    className="form-control"
+                    placeholder="ORIGINAL"
+                    value={receiptPrintConfig.labelOriginal ?? 'ORIGINAL'}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setReceiptPrintConfigState((prev) => ({ ...prev, labelOriginal: v }));
+                    }}
+                    onBlur={(e) => {
+                      setReceiptPrintConfig({ labelOriginal: e.target.value.trim() || 'ORIGINAL' });
+                    }}
+                  />
+                </div>
+                <div className="form-group" style={{ flex: 1 }}>
+                  <label className="form-label">Texto reimpresiones</label>
+                  <input
+                    type="text"
+                    className="form-control"
+                    placeholder="COPIA"
+                    value={receiptPrintConfig.labelCopia ?? 'COPIA'}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setReceiptPrintConfigState((prev) => ({ ...prev, labelCopia: v }));
+                    }}
+                    onBlur={(e) => {
+                      setReceiptPrintConfig({ labelCopia: e.target.value.trim() || 'COPIA' });
+                    }}
+                  />
+                </div>
+              </div>
+              <div className="form-group">
+                <label className="form-label">Probar impresión</label>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center' }}>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => {
+                      const r = openReceiptPrintPreviewDialog();
+                      if (r.success) {
+                        toast.success('Se abrió la vista previa y el cuadro de impresión (PDF o impresora)');
+                      } else {
+                        toast.error(r.error || 'No se pudo abrir la vista previa');
+                      }
+                    }}
+                  >
+                    <Printer size={16} style={{ marginRight: 6, verticalAlign: 'middle' }} />
+                    Cuadro de impresión (PDF / elegir impresora)
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-primary"
+                    onClick={async () => {
+                      toast.loading('Enviando a impresora térmica…', { id: 'thermal-test' });
+                      const r = await printReceiptTestThermal();
+                      toast.dismiss('thermal-test');
+                      if (r.success) {
+                        toast.success(
+                          'Listo: revisa la térmica o la ventana del cuadro de impresión (PDF / otra impresora)'
+                        );
+                      } else {
+                        toast.error(r.error || 'Error al imprimir');
+                      }
+                    }}
+                  >
+                    <Printer size={16} style={{ marginRight: 6, verticalAlign: 'middle' }} />
+                    Prueba en impresora de tickets
+                  </button>
+                </div>
+                <small className="form-hint">
+                  El primer botón abre el diálogo del sistema: puedes guardar como <strong>PDF</strong> o elegir
+                  cualquier impresora (incluida la térmica si aparece en el listado). El segundo envía un ticket de
+                  prueba por el flujo térmico (PosPrinter) con el ancho y nombre de impresora configurados arriba.
+                </small>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
       {renderSection('security-settings', 'Configuración de Seguridad', <Shield size={20} />,
         <div className="settings-form">
           <div className="form-group">
@@ -1442,6 +1989,179 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
         </div>
       )}
 
+      {renderSection(
+        'config-passwords',
+        'Contraseñas de configuración',
+        <Key size={20} />,
+        <div className="settings-form">
+          <p className="form-hint" style={{ marginBottom: '1rem', color: 'var(--bs-dark-text-muted)' }}>
+            <strong>Acceso:</strong> contraseña para abrir Configuración desde el POS.{' '}
+            <strong>Administrador:</strong> contraseña para editar el resto de ajustes. Si solo lectura está activo,
+            indica la <strong>contraseña de administrador actual</strong> abajo para poder guardar cambios aquí sin
+            pulsar «Desbloquear edición». Respaldo: usuario <strong>admin</strong> + contraseña <strong>admin</strong>{' '}
+            en el campo de usuario y contraseña correspondientes. Usa el icono del ojo para ver lo que escribes; las
+            contraseñas ya guardadas no se muestran solas por seguridad (puedes consultarlas abajo solo con edición
+            desbloqueada o en el asistente inicial).
+          </p>
+          {(isSetupMode || modifyUnlocked) && (
+            <div
+              className="form-group"
+              style={{
+                marginBottom: '1rem',
+                padding: '0.75rem 1rem',
+                borderRadius: 8,
+                border: '1px solid var(--bs-border-color, #dee2e6)',
+                background: 'var(--bs-dark-bg-subtle, rgba(0,0,0,0.04))',
+              }}
+            >
+              <label style={{ display: 'block', marginBottom: '0.5rem' }}>
+                Contraseñas vigentes en este equipo (solo referencia)
+              </label>
+              <p className="form-hint" style={{ marginBottom: '0.75rem', fontSize: '0.85rem' }}>
+                Úsalo para recordar qué debes escribir al cambiar contraseñas. No compartas esta pantalla.
+              </p>
+              <button
+                type="button"
+                className="btn-secondary"
+                style={{ marginBottom: showStoredPasswordsReference ? '0.75rem' : 0 }}
+                onClick={() => setShowStoredPasswordsReference((v) => !v)}
+              >
+                {showStoredPasswordsReference ? <EyeOff size={16} /> : <Eye size={16} />}
+                {showStoredPasswordsReference ? 'Ocultar' : 'Mostrar'} contraseñas guardadas
+              </button>
+              {showStoredPasswordsReference && (
+                <div style={{ fontFamily: 'ui-monospace, monospace', fontSize: '0.9rem', wordBreak: 'break-all' }}>
+                  <div style={{ marginBottom: '0.5rem' }}>
+                    <strong>Acceso:</strong>{' '}
+                    <span>{getConfigAccessPassword()}</span>
+                  </div>
+                  <div style={{ marginBottom: '0.5rem' }}>
+                    <strong>Administrador:</strong>{' '}
+                    <span>{getConfigModifyPassword()}</span>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+          <div className="form-group">
+            <label>Nueva contraseña de acceso (dejar vacío para no cambiar)</label>
+            <div className="api-key-input-group">
+              <input
+                type={showPwAccessInput ? 'text' : 'password'}
+                autoComplete="new-password"
+                value={newAccessPassword}
+                onChange={(e) => setNewAccessPassword(e.target.value)}
+                placeholder="Nueva contraseña de acceso"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPwAccessInput(!showPwAccessInput)}
+                className="icon-btn"
+                aria-label={showPwAccessInput ? 'Ocultar contraseña' : 'Mostrar contraseña'}
+              >
+                {showPwAccessInput ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
+          </div>
+          <div className="form-group">
+            <label>Nueva contraseña de administrador</label>
+            <div className="api-key-input-group">
+              <input
+                type={showPwModifyNew ? 'text' : 'password'}
+                autoComplete="new-password"
+                value={newModifyPassword}
+                onChange={(e) => setNewModifyPassword(e.target.value)}
+                placeholder="Nueva contraseña de administrador"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPwModifyNew(!showPwModifyNew)}
+                className="icon-btn"
+                aria-label={showPwModifyNew ? 'Ocultar contraseña' : 'Mostrar contraseña'}
+              >
+                {showPwModifyNew ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
+          </div>
+          <div className="form-group">
+            <label>Confirmar contraseña de administrador</label>
+            <div className="api-key-input-group">
+              <input
+                type={showPwModifyConfirm ? 'text' : 'password'}
+                autoComplete="new-password"
+                value={confirmModifyPassword}
+                onChange={(e) => setConfirmModifyPassword(e.target.value)}
+                placeholder="Repetir contraseña de administrador"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPwModifyConfirm(!showPwModifyConfirm)}
+                className="icon-btn"
+                aria-label={showPwModifyConfirm ? 'Ocultar contraseña' : 'Mostrar contraseña'}
+              >
+                {showPwModifyConfirm ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
+          </div>
+          {!isSetupMode && settingsLocked && (
+            <div className="form-group">
+              <label>Usuario (opcional, para respaldo admin / admin)</label>
+              <input
+                type="text"
+                autoComplete="username"
+                value={currentAdminUsernameForPasswordChange}
+                onChange={(e) => setCurrentAdminUsernameForPasswordChange(e.target.value)}
+                placeholder="admin"
+                className="url-input"
+                style={{
+                  width: '100%',
+                  padding: '0.625rem 0.75rem',
+                  background: 'var(--bs-dark-surface)',
+                  border: '1px solid var(--bs-dark-border)',
+                  borderRadius: 'var(--bs-radius)',
+                  color: 'var(--bs-dark-text)',
+                }}
+              />
+            </div>
+          )}
+          {!isSetupMode && settingsLocked && (
+            <div className="form-group">
+              <label>Contraseña de administrador actual (obligatoria para guardar en modo solo lectura)</label>
+              <div className="api-key-input-group">
+                <input
+                  type={showPwCurrentAdmin ? 'text' : 'password'}
+                  autoComplete="current-password"
+                  value={currentAdminForPasswordChange}
+                  onChange={(e) => setCurrentAdminForPasswordChange(e.target.value)}
+                  placeholder="Contraseña de administrador vigente"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPwCurrentAdmin(!showPwCurrentAdmin)}
+                  className="icon-btn"
+                  aria-label={showPwCurrentAdmin ? 'Ocultar contraseña' : 'Mostrar contraseña'}
+                >
+                  {showPwCurrentAdmin ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
+            </div>
+          )}
+          <button type="button" className="btn-primary" onClick={handleSaveConfigPasswords}>
+            <Key size={18} />
+            Guardar contraseñas
+          </button>
+        </div>,
+        { alwaysInteractive: true }
+      )}
+
+      {renderSection(
+        'roles-screen-lock',
+        'Roles y bloqueo de pantalla',
+        <Users size={20} />,
+        <RolesScreenLockPanel />,
+        { alwaysInteractive: true }
+      )}
+
       {/* Utilities Section */}
       {renderSection('utilities', 'Utilidades', <Database size={20} />,
         <div className="settings-form">
@@ -1477,31 +2197,175 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
       )}
 
       {/* Actions - Sticky Footer */}
-      <div className="settings-actions">
-        <button 
-          className="btn-primary" 
-          onClick={handleSave}
-          disabled={isLoading}
-          style={{
-            minWidth: '200px',
-            fontSize: '1rem',
-            padding: '0.875rem 2rem',
-            fontWeight: 600
+      <div inert={settingsLocked ? true : undefined}>
+        <div className="settings-actions">
+          <button
+            className="btn-primary"
+            onClick={handleSave}
+            disabled={isLoading}
+            style={{
+              minWidth: '200px',
+              fontSize: '1rem',
+              padding: '0.875rem 2rem',
+              fontWeight: 600,
+            }}
+          >
+            {isLoading ? (
+              <>
+                <div className="spinner" style={{ marginRight: '0.5rem' }}></div>
+                Guardando...
+              </>
+            ) : (
+              <>
+                <Save size={20} />
+                Guardar Configuración
+              </>
+            )}
+          </button>
+        </div>
+      </div>
+
+      {showModifyUnlockModal && (
+        <div
+          className="modal-overlay"
+          onClick={() => {
+            setShowModifyUnlockModal(false);
+            setModifyUnlockPassword('');
+            setModifyUnlockUsername('');
+            setModifyUnlockError(false);
           }}
         >
-          {isLoading ? (
-            <>
-              <div className="spinner" style={{ marginRight: '0.5rem' }}></div>
-              Guardando...
-            </>
-          ) : (
-            <>
-              <Save size={20} />
-              Guardar Configuración
-            </>
-          )}
-        </button>
-      </div>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Desbloquear edición</h3>
+              <button
+                type="button"
+                className="close-btn"
+                onClick={() => {
+                  setShowModifyUnlockModal(false);
+                  setModifyUnlockPassword('');
+                  setModifyUnlockUsername('');
+                  setModifyUnlockError(false);
+                }}
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <div className="modal-body">
+              <p style={{ marginBottom: '0.75rem' }}>
+                Introduce la contraseña de administrador guardada en este equipo, o usuario <strong>admin</strong> con
+                contraseña <strong>admin</strong> como respaldo.
+              </p>
+              <label
+                htmlFor="modify-unlock-user"
+                style={{ display: 'block', marginBottom: '0.35rem', fontSize: '0.875rem', fontWeight: 500 }}
+              >
+                Usuario (opcional)
+              </label>
+              <input
+                id="modify-unlock-user"
+                type="text"
+                autoComplete="username"
+                value={modifyUnlockUsername}
+                onChange={(e) => {
+                  setModifyUnlockError(false);
+                  setModifyUnlockUsername(e.target.value);
+                }}
+                className="url-input"
+                style={{
+                  width: '100%',
+                  padding: '0.625rem 0.75rem',
+                  marginBottom: '0.75rem',
+                  background: 'var(--bs-dark-surface)',
+                  border: '1px solid var(--bs-dark-border)',
+                  borderRadius: 'var(--bs-radius)',
+                  color: 'var(--bs-dark-text)',
+                }}
+                placeholder="admin si usas el respaldo"
+              />
+              <label
+                htmlFor="modify-unlock-pass"
+                style={{ display: 'block', marginBottom: '0.35rem', fontSize: '0.875rem', fontWeight: 500 }}
+              >
+                Contraseña de administrador
+              </label>
+              <input
+                id="modify-unlock-pass"
+                type="password"
+                autoComplete="current-password"
+                value={modifyUnlockPassword}
+                onChange={(e) => {
+                  setModifyUnlockError(false);
+                  setModifyUnlockPassword(e.target.value);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    setModifyUnlockError(false);
+                    if (unlockConfigurationModifyWithPassword(modifyUnlockPassword, modifyUnlockUsername)) {
+                      setModifyUnlocked(true);
+                      setShowModifyUnlockModal(false);
+                      setModifyUnlockPassword('');
+                      setModifyUnlockUsername('');
+                      toast.success('Edición desbloqueada');
+                    } else {
+                      setModifyUnlockError(true);
+                    }
+                  }
+                }}
+                className="url-input"
+                style={{
+                  width: '100%',
+                  padding: '0.625rem 0.75rem',
+                  background: 'var(--bs-dark-surface)',
+                  border: '1px solid var(--bs-dark-border)',
+                  borderRadius: 'var(--bs-radius)',
+                  color: 'var(--bs-dark-text)',
+                }}
+                placeholder="Contraseña de administrador"
+              />
+              {modifyUnlockError && (
+                <p style={{ color: 'var(--bs-danger, #dc3545)', marginTop: '0.5rem', fontSize: '0.875rem' }}>
+                  Credenciales incorrectas
+                </p>
+              )}
+            </div>
+            <div className="modal-footer">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => {
+                  setShowModifyUnlockModal(false);
+                  setModifyUnlockPassword('');
+                  setModifyUnlockUsername('');
+                  setModifyUnlockError(false);
+                }}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={() => {
+                  setModifyUnlockError(false);
+                  if (unlockConfigurationModifyWithPassword(modifyUnlockPassword, modifyUnlockUsername)) {
+                    setModifyUnlocked(true);
+                    setShowModifyUnlockModal(false);
+                    setModifyUnlockPassword('');
+                    setModifyUnlockUsername('');
+                    toast.success('Edición desbloqueada');
+                  } else {
+                    setModifyUnlockError(true);
+                  }
+                }}
+              >
+                <Unlock size={18} />
+                Desbloquear
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modal Contactar Desarrollador */}
       {showContactDeveloperModal && (

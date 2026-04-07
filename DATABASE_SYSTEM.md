@@ -1,325 +1,88 @@
-# Sistema de Base de Datos Local - BizneAI POS
+# Almacenamiento local y bases de datos — BizneAI POS
 
-## 📋 **Descripción General**
+Documento alineado con el código actual. Para el mapa completo (MCP, ventas remotas, proxy y claves `localStorage`), ver **[docs/LOCAL_DATABASE_AND_API_SYNC.md](docs/LOCAL_DATABASE_AND_API_SYNC.md)**.
 
-El sistema de base de datos local utiliza **SQLite** para almacenar todas las operaciones de la tienda de forma local, proporcionando persistencia de datos y funcionalidad offline. Los identificadores de la tienda (`_id` y `clientId`) se manejan a través de un contexto React para facilitar el acceso en toda la aplicación.
+## Qué usa la aplicación hoy
 
-## 🏗️ **Arquitectura del Sistema**
+### 1. `localStorage` (capa principal)
 
-### **1. Contexto de Tienda (StoreContext)**
-- **Archivo**: `src/contexts/StoreContext.tsx`
-- **Propósito**: Manejar los identificadores de la tienda globalmente
-- **Identificadores**:
-  - `_id`: ID único generado por MongoDB cuando se crea la tienda
-  - `clientId`: ID del cliente para servicios externos
-  - `storeName`: Nombre de la tienda
-  - `storeType`: Tipo de tienda (Restaurant, CoffeeShop, etc.)
+Casi todo el POS persiste en el **renderer** (navegador / ventana Electron) con claves `bizneai-*` y Merkle `@BizneAI_*`: productos, carrito, configuración de tienda, clientes del registro local, cocina, waitlist, roles / bloqueo de pantalla, impuestos, etc.
 
-### **2. Base de Datos SQLite**
-- **Archivo**: `src/database/database.ts`
-- **Propósito**: Almacenar todas las operaciones locales
-- **Ubicación**: 
-  - Desarrollo: `./bizneai.db`
-  - Producción: `userData/bizneai.db`
+El **asistente de configuración (setup)** en Configuración guarda identificadores y opciones en `localStorage` (`bizneai-server-config`, `bizneai-store-identifiers`, `bizneai-store-config`, …). **No crea ni abre ningún archivo SQLite** durante el setup.
 
-### **3. Hook de Base de Datos**
-- **Archivo**: `src/hooks/useDatabase.ts`
-- **Propósito**: Proporcionar una API limpia para operaciones de BD
-- **Funcionalidades**: CRUD para productos, ventas, clientes, configuración
+### 2. SQLite en el servidor Express (`better-sqlite3`) — actividad local
 
-## 🗄️ **Estructura de la Base de Datos**
+**Archivos:** `server/src/localActivityDb.ts`, rutas `server/src/routes/localActivityRoutes.ts`.
 
-### **Tablas Principales**
+**Base de datos:** `server/data/local-activity.db` (se crea al usar la BD; modo WAL).
 
-#### **1. products**
-```sql
-CREATE TABLE products (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL,
-  price REAL NOT NULL,
-  category TEXT NOT NULL,
-  stock INTEGER NOT NULL DEFAULT 0,
-  barcode TEXT,
-  image TEXT,
-  description TEXT,
-  cost REAL,
-  sku TEXT,
-  status TEXT NOT NULL DEFAULT 'active',
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-```
+**Tablas:**
 
-#### **2. sales**
-```sql
-CREATE TABLE sales (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  store_id TEXT NOT NULL,
-  client_id TEXT NOT NULL,
-  total_amount REAL NOT NULL,
-  payment_method TEXT NOT NULL,
-  customer_info TEXT,
-  status TEXT NOT NULL DEFAULT 'completed',
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-```
+- `session_events` — eventos de bloqueo / desbloqueo (PIN, rol).
+- `sale_cashier_events` — ventas asociadas a cajero / identidad de pantalla.
 
-#### **3. sale_items**
-```sql
-CREATE TABLE sale_items (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  sale_id INTEGER NOT NULL,
-  product_id INTEGER NOT NULL,
-  product_name TEXT NOT NULL,
-  quantity INTEGER NOT NULL,
-  unit_price REAL NOT NULL,
-  total_price REAL NOT NULL,
-  FOREIGN KEY (sale_id) REFERENCES sales (id) ON DELETE CASCADE,
-  FOREIGN KEY (product_id) REFERENCES products (id) ON DELETE CASCADE
-);
-```
+**Cuándo entra en juego:** solo cuando el proceso **Node** ejecuta la API local, p. ej. `npm run dev`, `npm run dev:server` o `tsx server/src/index.ts`. La primera operación que llama a `getLocalActivityDb()` abre el fichero y ejecuta `CREATE TABLE IF NOT EXISTS`.
 
-#### **4. store_config**
-```sql
-CREATE TABLE store_config (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  store_id TEXT NOT NULL UNIQUE,
-  client_id TEXT NOT NULL,
-  store_name TEXT NOT NULL,
-  store_type TEXT NOT NULL,
-  config_data TEXT NOT NULL,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-```
+El cliente escribe aquí **solo si** la UI corre con origen **localhost** y puede hacer `POST` a `http://localhost:3000/api/local-activity/*`. Siempre mantiene copia en `localStorage` como respaldo (`src/services/localActivityLog.ts`).
 
-#### **5. inventory**
-```sql
-CREATE TABLE inventory (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  product_id INTEGER NOT NULL,
-  quantity INTEGER NOT NULL,
-  operation_type TEXT NOT NULL,
-  reference TEXT,
-  reference_id INTEGER,
-  notes TEXT,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (product_id) REFERENCES products (id) ON DELETE CASCADE
-);
-```
+### 3. Módulo `src/database/database.ts` (no integrado en el flujo actual)
 
-#### **6. backups**
-```sql
-CREATE TABLE backups (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  store_id TEXT NOT NULL,
-  backup_type TEXT NOT NULL,
-  status TEXT NOT NULL,
-  file_path TEXT,
-  file_size INTEGER,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-```
+Define un `DatabaseManager` con **better-sqlite3** y rutas `bizneai.db` (desarrollo: cwd; producción: `userData` de Electron **si** se usara desde el proceso principal).
 
-## 🔄 **Flujo de Configuración Inicial**
+En la práctica:
 
-### **1. Configuración de Tienda**
-```typescript
-// En Settings.tsx - Modo setup
-const response = await storeAPI.setupStore(setupData);
+- **No** está montado en `server/src/index.ts` (las rutas de `src/server/databaseRoutes.ts` no se registran en el servidor Express del proyecto).
+- El hook **`useDatabase`** (`src/hooks/useDatabase.ts`) **no** llama a ese módulo: simula conexión y usa stubs (sin SQLite real en el renderer).
+- **Electron** (`electron/main.js`) **no** inicializa esta base de datos ni arranca el servidor Express.
 
-if (response.success) {
-  // Guardar identificadores en contexto
-  setStoreIdentifiers({
-    _id: storeData._id,
-    clientId: storeData.clientId,
-    storeName: storeData.storeName,
-    storeType: storeData.storeType
-  });
-
-  // Guardar en base de datos local
-  await saveStoreConfig({
-    store_id: storeData._id,
-    client_id: storeData.clientId,
-    store_name: storeData.storeName,
-    store_type: storeData.storeType,
-    config_data: JSON.stringify(formData)
-  });
-}
-```
-
-### **2. Persistencia de Identificadores**
-- **localStorage**: `bizneai-store-identifiers`
-- **Contexto React**: Disponible en toda la aplicación
-- **Base de datos**: Tabla `store_config`
-
-## 🛠️ **Uso del Sistema**
-
-### **1. Acceder al Contexto de Tienda**
-```typescript
-import { useStore } from '../contexts/StoreContext';
-
-const MyComponent = () => {
-  const { storeIdentifiers, isStoreConfigured } = useStore();
-  
-  if (!isStoreConfigured) {
-    return <div>Tienda no configurada</div>;
-  }
-  
-  return (
-    <div>
-      Tienda: {storeIdentifiers.storeName}
-      ID: {storeIdentifiers._id}
-      Client ID: {storeIdentifiers.clientId}
-    </div>
-  );
-};
-```
-
-### **2. Operaciones de Base de Datos**
-```typescript
-import { useDatabase } from '../hooks/useDatabase';
-
-const MyComponent = () => {
-  const { 
-    addProduct, 
-    getProducts, 
-    addSale, 
-    getStats,
-    isConnected 
-  } = useDatabase();
-
-  // Agregar producto
-  const handleAddProduct = async () => {
-    const productId = await addProduct({
-      name: 'Producto Nuevo',
-      price: 10.99,
-      category: 'General',
-      stock: 100
-    });
-  };
-
-  // Obtener estadísticas
-  const loadStats = async () => {
-    const stats = await getStats();
-    console.log('Ventas totales:', stats.totalSales);
-  };
-};
-```
-
-## 🔌 **Integración con Servicios**
-
-### **1. Kitchen Service**
-```typescript
-// Los identificadores permiten:
-- Crear órdenes específicas de la tienda
-- Sincronizar con cocina externa
-- Gestionar inventario por tienda
-- Reportes de cocina por ubicación
-```
-
-### **2. E-commerce Service**
-```typescript
-// Los identificadores permiten:
-- Crear tienda online específica
-- Sincronizar productos
-- Gestionar pedidos online
-- Integrar con plataformas externas
-```
-
-### **3. Waitlist Service**
-```typescript
-// Los identificadores permiten:
-- Crear lista de espera por tienda
-- Gestionar reservas específicas
-- Notificaciones personalizadas
-- Integración con sistemas externos
-```
-
-## 📊 **Estadísticas Disponibles**
-
-### **Métricas Principales**
-- **totalSales**: Número total de ventas
-- **totalRevenue**: Ingresos totales
-- **totalProducts**: Productos activos
-- **lowStockProducts**: Productos con bajo stock
-- **recentSales**: Ventas de los últimos 7 días
-
-### **Uso de Estadísticas**
-```typescript
-const { getStats } = useDatabase();
-
-const loadDashboard = async () => {
-  const stats = await getStats();
-  
-  // Actualizar dashboard
-  setDashboardData({
-    sales: stats.totalSales,
-    revenue: stats.totalRevenue,
-    products: stats.totalProducts,
-    lowStock: stats.lowStockProducts
-  });
-};
-```
-
-## 🔒 **Seguridad y Validación**
-
-### **1. Validación de Identificadores**
-- Todos los endpoints requieren `store_id` y `client_id`
-- Middleware de validación automática
-- Error handling para identificadores faltantes
-
-### **2. Transacciones**
-- Operaciones de venta en transacciones
-- Rollback automático en caso de error
-- Actualización de inventario atómica
-
-## 🚀 **Próximos Pasos**
-
-### **1. Servicios de Integración**
-- [ ] Kitchen Service API
-- [ ] E-commerce Service API
-- [ ] Waitlist Service API
-
-### **2. Funcionalidades Avanzadas**
-- [ ] Sincronización con servidor remoto
-- [ ] Backup automático en la nube
-- [ ] Multi-ubicación
-- [ ] Reportes avanzados
-
-### **3. Optimizaciones**
-- [ ] Índices de base de datos
-- [ ] Caché de consultas frecuentes
-- [ ] Compresión de datos
-- [ ] Limpieza automática de datos antiguos
-
-## 📝 **Notas de Desarrollo**
-
-### **Entorno de Desarrollo**
-- Base de datos: `./bizneai.db`
-- Logs: Console del navegador
-- Hot reload: Automático con Vite
-
-### **Entorno de Producción**
-- Base de datos: `userData/bizneai.db`
-- Logs: Archivos de log de Electron
-- Backup: Automático según configuración
-
-### **Depuración**
-```typescript
-// Verificar conexión
-const { isConnected, error } = useDatabase();
-
-// Verificar identificadores
-const { storeIdentifiers, isStoreConfigured } = useStore();
-
-console.log('DB Connected:', isConnected);
-console.log('Store Configured:', isStoreConfigured);
-console.log('Store ID:', storeIdentifiers._id);
-```
+El esquema SQL que aparece más abajo describe lo que **implementaría** `database.ts` si se conectara; no es la fuente de verdad del POS en la build actual.
 
 ---
 
-**Sistema de Base de Datos Local - BizneAI POS**  
-*Versión 1.0.0*  
-*Última actualización: Diciembre 2024* 
+## Esquema legado (`src/database/database.ts`) — referencia
+
+Si en el futuro se cablea este módulo desde un proceso Node/Electron adecuado, las tablas previstas incluyen:
+
+**products** — catálogo local.
+
+**sales** / **sale_items** — ventas e ítems.
+
+**store_config** — configuración por tienda.
+
+**inventory** — movimientos de inventario.
+
+**backups** — metadatos de respaldos.
+
+(Definiciones exactas en el propio `src/database/database.ts`, método `createTables`.)
+
+---
+
+## Contexto de tienda
+
+**Archivo:** `src/contexts/StoreContext.tsx`.
+
+Identificadores (`_id`, `clientId`, nombre, tipo de tienda) se sincronizan con `localStorage` (`bizneai-store-identifiers`) para uso en toda la UI. Esto complementa, no reemplaza, la documentación de sync remota en [LOCAL_DATABASE_AND_API_SYNC.md](docs/LOCAL_DATABASE_AND_API_SYNC.md).
+
+---
+
+## Instalación y ejecución de better-sqlite3
+
+| Paso | Qué ocurre |
+|------|------------|
+| **`npm install`** | Instala el paquete `better-sqlite3` y, según plataforma, descarga **prebuild** o compila con `node-gyp` para el **Node** con el que ejecutaste el install. No abre ningún `.db` todavía. |
+| **`npm run fix-deps`** (p. ej. antes de `dist:*`) | Ejecuta `electron-rebuild --only better-sqlite3` para alinear el binario nativo con **Electron** empaquetado. Útil para el **builder**; el servidor de desarrollo usa el **Node del sistema** (`tsx`), que normalmente usa el binario instalado con `npm install`. |
+| **Arranque del servidor** (`server/src/index.ts`) | Carga rutas; **SQLite de actividad** se abre en la **primera** operación que invoque `getLocalActivityDb()` (p. ej. primer `POST` a `/api/local-activity/...`). |
+| **Wizard de setup en la app** | Solo **localStorage**. No ejecuta `better-sqlite3`. |
+| **App Electron en producción** (solo `dist` + ventana) | **No** arranca Express en `main.js`; salvo que ejecutes el servidor por separado, **no** se usa `local-activity.db` en esa sesión; la actividad queda en `localStorage`. |
+
+---
+
+## Resumen
+
+- **Datos del día a día del POS:** `localStorage` (+ API remota para ventas y catálogo MCP).
+- **SQLite activo en repo:** solo `server/data/local-activity.db` cuando corre el servidor Express.
+- **`bizneai.db` en `database.ts`:** código presente, **no** conectado al flujo actual; **`useDatabase` no es una capa SQLite real**.
+
+---
+
+*Revisión: abril 2026 — coherente con [docs/LOCAL_DATABASE_AND_API_SYNC.md](docs/LOCAL_DATABASE_AND_API_SYNC.md).*

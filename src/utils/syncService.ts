@@ -4,8 +4,8 @@
  * el sistema funciona con los datos descargados la primera vez.
  */
 
-import { getProductsFromMcp, getShopId, getMcpUrl } from './shopIdHelper';
-import { mapMcpProductToLocal } from './shopIdHelper';
+import { getProductsFromMcp, getShopId, getMcpUrl, mapMcpProductToLocal, mergeProductsFromServerPreserveImages } from './shopIdHelper';
+import { syncProductImagesToLocalDisk } from '../services/productImageLocalCache';
 
 const LAST_SYNC_KEY = 'bizneai-last-sync';
 const SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 horas
@@ -52,11 +52,23 @@ export const runBackgroundSync = async (onSuccess?: (productCount: number) => vo
     const mcpProducts = await getProductsFromMcp();
     if (!mcpProducts || mcpProducts.length === 0) return false;
 
+    let savedParsed: unknown[] = [];
+    try {
+      const raw = localStorage.getItem('bizneai-products');
+      if (raw) {
+        const p = JSON.parse(raw);
+        if (Array.isArray(p)) savedParsed = p;
+      }
+    } catch {
+      /* ignore */
+    }
     const mappedProducts = mcpProducts.map((p: any, index: number) => mapMcpProductToLocal(p, index));
-    localStorage.setItem('bizneai-products', JSON.stringify(mappedProducts));
+    const merged = mergeProductsFromServerPreserveImages(savedParsed, mappedProducts);
+    const withLocalImages = await syncProductImagesToLocalDisk(merged);
+    localStorage.setItem('bizneai-products', JSON.stringify(withLocalImages));
     setLastSyncTime();
     window.dispatchEvent(new Event('products-updated'));
-    onSuccess?.(mappedProducts.length);
+    onSuccess?.(withLocalImages.length);
     return true;
   } catch (error) {
     console.warn('Background sync failed (offline?):', error);

@@ -1,7 +1,10 @@
 /**
  * Helper utilities for working with Shop ID and MCP URLs
  */
-
+/* eslint-disable @typescript-eslint/no-explicit-any -- Respuestas MCP heterogéneas; tipado estricto en mapMcp* y helpers nuevos */
+import { normalizeProductId } from './productId';
+import { getLocalApiOrigin, shouldUseSalesMcpProxy } from './localApiBase';
+import { scheduleMirrorKeyToSqlite } from '../services/posPersistService';
 /**
  * Get the shop ID from localStorage or context
  * @returns Shop ID string or null if not found
@@ -37,18 +40,9 @@ export const getShopId = (): string | null => {
   }
 };
 
-/** Detecta si estamos en localhost (dev) para usar proxy y evitar CORS */
-const isLocalhostOrigin = (): boolean => {
-  if (typeof window === 'undefined') return false;
-  const o = window.location?.origin || '';
-  return o.includes('localhost') || o.includes('127.0.0.1');
-};
-
-const MCP_PROXY_BASE = 'http://localhost:3000/api/proxy';
-
 /**
  * Get the MCP URL from localStorage or build it from shopId.
- * En dev (localhost) usa proxy local para evitar CORS.
+ * En dev (localhost) o Electron (file://) usa proxy local :3000 para evitar CORS.
  * @returns MCP URL string or null if shopId not found
  */
 export const getMcpUrl = (): string | null => {
@@ -56,8 +50,8 @@ export const getMcpUrl = (): string | null => {
     const shopId = getShopId();
     if (!shopId) return null;
 
-    if (isLocalhostOrigin()) {
-      return `${MCP_PROXY_BASE}/mcp/${shopId}`;
+    if (shouldUseSalesMcpProxy()) {
+      return `${getLocalApiOrigin()}/api/proxy/mcp/${shopId}`;
     }
 
     const serverConfig = localStorage.getItem('bizneai-server-config');
@@ -140,11 +134,13 @@ export const syncKitchenEnabledFromMcp = (): void => {
       const config = existing ? JSON.parse(existing) : {};
       config.kitchenEnabled = kitchenOn;
       localStorage.setItem('bizneai-store-config', JSON.stringify(config));
+      scheduleMirrorKeyToSqlite('bizneai-store-config');
       const serverRaw = localStorage.getItem('bizneai-server-config');
       if (serverRaw) {
         const server = JSON.parse(serverRaw);
         server.kitchenEnabled = kitchenOn;
         localStorage.setItem('bizneai-server-config', JSON.stringify(server));
+        scheduleMirrorKeyToSqlite('bizneai-server-config');
       }
       window.dispatchEvent(new Event('store-config-updated'));
     } catch (e) {
@@ -235,35 +231,137 @@ export const getTransactionsFromMcp = async (): Promise<any[] | null> => {
   }
 };
 
+/** Normaliza objeto MCP desconocido a mapa para lectura segura */
+function asMcpRecord(mcpProduct: unknown): Record<string, unknown> {
+  return mcpProduct && typeof mcpProduct === 'object' ? (mcpProduct as Record<string, unknown>) : {};
+}
+
 /**
  * Map MCP product to local Product format
  */
-export const mapMcpProductToLocal = (mcpProduct: any, index: number = 0): any => {
+export const mapMcpProductToLocal = (mcpProduct: unknown, index: number = 0): Record<string, unknown> => {
+  const p = asMcpRecord(mcpProduct);
+  const id = p._id ?? `product_${index}`;
+  const price = typeof p.price === 'number' ? p.price : Number(p.price) || 0;
+  const cost = typeof p.cost === 'number' ? p.cost : Number(p.cost) || price;
   return {
-    id: mcpProduct._id || `product_${index}`,
-    name: mcpProduct.name || '',
-    description: mcpProduct.description || '',
-    price: mcpProduct.price || 0,
-    cost: mcpProduct.cost || mcpProduct.price || 0,
-    category: mcpProduct.category || mcpProduct.mainCategory || 'General',
-    stock: mcpProduct.stock || 0,
-    minStock: mcpProduct.minStock || 0,
-    maxStock: mcpProduct.maxStock || 0,
-    barcode: mcpProduct.barcode || '',
-    sku: mcpProduct.sku || '',
-    unit: mcpProduct.unitOfMeasure || 'piece',
+    id,
+    name: String(p.name ?? ''),
+    description: String(p.description ?? ''),
+    price,
+    cost,
+    category: String(p.category ?? p.mainCategory ?? 'General'),
+    stock: typeof p.stock === 'number' ? p.stock : Number(p.stock) || 0,
+    minStock: typeof p.minStock === 'number' ? p.minStock : Number(p.minStock) || 0,
+    maxStock: typeof p.maxStock === 'number' ? p.maxStock : Number(p.maxStock) || 0,
+    barcode: String(p.barcode ?? ''),
+    sku: String(p.sku ?? ''),
+    unit: String(p.unitOfMeasure ?? 'piece'),
     supplier: '',
     location: '',
-    isActive: mcpProduct.status === 'active',
+    isActive: p.status === 'active',
     image: resolveBestImageUrl(mcpProduct) || '',
     tags: [],
-    createdAt: mcpProduct.createdAt || new Date().toISOString(),
-    updatedAt: mcpProduct.updatedAt || new Date().toISOString(),
-    hasVariants: !!mcpProduct.hasVariants,
-    variantGroups: mcpProduct.variantGroups || undefined,
-    primaryVariantGroup: mcpProduct.primaryVariantGroup || undefined,
-    isWeightBased: !!mcpProduct.isWeightBased
+    createdAt: p.createdAt != null && String(p.createdAt) !== '' ? String(p.createdAt) : '',
+    updatedAt: p.updatedAt != null && String(p.updatedAt) !== '' ? String(p.updatedAt) : '',
+    hasVariants: Boolean(p.hasVariants),
+    variantGroups: p.variantGroups ?? undefined,
+    primaryVariantGroup: p.primaryVariantGroup ?? undefined,
+    isWeightBased: Boolean(p.isWeightBased),
+    priceIncludesTax: typeof p.priceIncludesTax === 'boolean' ? p.priceIncludesTax : undefined,
+    taxExempt: typeof p.taxExempt === 'boolean' ? p.taxExempt : undefined,
   };
+};
+
+/** Campos que definen si el servidor cambió datos (excluye id e image). */
+const SYNC_DATA_KEYS: readonly string[] = [
+  'name',
+  'description',
+  'price',
+  'cost',
+  'category',
+  'stock',
+  'minStock',
+  'maxStock',
+  'barcode',
+  'sku',
+  'unit',
+  'supplier',
+  'location',
+  'isActive',
+  'hasVariants',
+  'variantGroups',
+  'primaryVariantGroup',
+  'isWeightBased',
+  'priceIncludesTax',
+  'taxExempt',
+  'createdAt',
+  'updatedAt',
+  'tags',
+];
+
+function productDataFingerprint(row: Record<string, unknown>): string {
+  const o: Record<string, unknown> = {};
+  for (const k of SYNC_DATA_KEYS) {
+    const key = k as string;
+    if (key in row) o[key] = row[key];
+  }
+  return JSON.stringify(o, Object.keys(o).sort());
+}
+
+function pickMergedImage(remote: Record<string, unknown>, local: Record<string, unknown>): string {
+  const r = String(remote.image ?? '').trim();
+  const l = String(local.image ?? '').trim();
+  if (r) return r;
+  return l;
+}
+
+function shouldKeepLocalUnchanged(
+  prev: Record<string, unknown>,
+  remote: Record<string, unknown>
+): boolean {
+  const u1 = String(prev.updatedAt ?? '').trim();
+  const u2 = String(remote.updatedAt ?? '').trim();
+  if (u1 && u2 && u1 === u2) return true;
+  return productDataFingerprint(prev) === productDataFingerprint(remote);
+}
+
+/**
+ * Tras traer el catálogo del servidor: conserva filas locales sin cambios si los datos
+ * coinciden (misma huella / mismo updatedAt) y mantiene la imagen local si el remoto viene sin URL.
+ * El orden y el conjunto de IDs siguen al listado remoto (fuente de verdad).
+ */
+export const mergeProductsFromServerPreserveImages = (
+  localProducts: unknown[] | null | undefined,
+  remoteMapped: Record<string, unknown>[]
+): Record<string, unknown>[] => {
+  const local = Array.isArray(localProducts) ? localProducts : [];
+  const localByKey = new Map<number, Record<string, unknown>>();
+  for (let i = 0; i < local.length; i++) {
+    const p = local[i];
+    if (p && typeof p === 'object') {
+      const row = p as Record<string, unknown>;
+      const key = normalizeProductId(row.id, i);
+      localByKey.set(key, row);
+    }
+  }
+
+  const out: Record<string, unknown>[] = [];
+  for (let i = 0; i < remoteMapped.length; i++) {
+    const r = remoteMapped[i];
+    const key = normalizeProductId(r.id, i);
+    const prev = localByKey.get(key);
+    if (!prev) {
+      out.push(r);
+      continue;
+    }
+    if (shouldKeepLocalUnchanged(prev, r)) {
+      out.push(prev);
+      continue;
+    }
+    out.push({ ...prev, ...r, image: pickMergedImage(r, prev) });
+  }
+  return out;
 };
 
 const CLOUDINARY_PRODUCTS_BASE_URL = 'https://res.cloudinary.com/pin-pos/image/upload';
@@ -304,8 +402,8 @@ const buildCloudinaryProductImageUrl = (value: string): string | null => {
   return `${CLOUDINARY_PRODUCTS_BASE_URL}/v${version}/products/${filename}`;
 };
 
-const normalizeImageValue = (value?: string): string | null => {
-  if (!value || typeof value !== 'string') return null;
+const normalizeImageValue = (value: unknown): string | null => {
+  if (value == null || typeof value !== 'string') return null;
   const trimmed = value.trim();
   if (!trimmed) return null;
 
@@ -321,13 +419,20 @@ const normalizeImageValue = (value?: string): string | null => {
   return trimmed;
 };
 
-const resolveBestImageUrl = (product: any): string | null => {
-  const candidates = [
-    ...(product?.images || []),
-    ...(product?.imageMetadata?.cloudinaryUrls || []),
-    ...(product?.imageMetadata?.localUrls || []),
-    product?.image,
-    product?.thumbnail
+const resolveBestImageUrl = (product: unknown): string | null => {
+  const p = asMcpRecord(product);
+  const meta =
+    p.imageMetadata && typeof p.imageMetadata === 'object'
+      ? (p.imageMetadata as Record<string, unknown>)
+      : {};
+  const cloud = meta.cloudinaryUrls;
+  const local = meta.localUrls;
+  const candidates: unknown[] = [
+    ...(Array.isArray(p.images) ? p.images : []),
+    ...(Array.isArray(cloud) ? cloud : []),
+    ...(Array.isArray(local) ? local : []),
+    p.image,
+    p.thumbnail,
   ];
 
   for (const candidate of candidates) {
@@ -439,29 +544,35 @@ export const enrichProductsWithImages = async (products: any[]): Promise<any[]> 
 /**
  * Map MCP transaction to local Sale format
  */
-export const mapMcpTransactionToSale = (mcpTransaction: any, index: number = 0): any => {
+export const mapMcpTransactionToSale = (mcpTransaction: unknown, index: number = 0): Record<string, unknown> => {
+  const t = asMcpRecord(mcpTransaction);
+  const rawItems = t.items;
+  const items = Array.isArray(rawItems) ? rawItems : [];
   return {
-    id: mcpTransaction._id || `sale_${index}`,
-    date: mcpTransaction.createdAt || new Date().toISOString(),
-    customer: mcpTransaction.customerName || 'Walk-in Customer',
-    items: (mcpTransaction.items || []).map((item: any) => ({
-      product: {
-        id: item.productId || `product_${index}`,
-        name: item.productName || '',
-        price: item.unitPrice || 0,
-        category: item.category || 'General'
-      },
-      quantity: item.quantity || 0
-    })),
-    subtotal: mcpTransaction.subtotal || 0,
-    tax: mcpTransaction.tax || 0,
-    discount: mcpTransaction.discount || 0,
-    total: mcpTransaction.total || 0,
-    paymentMethod: mcpTransaction.paymentMethod || 'cash',
-    status: mcpTransaction.paymentStatus || 'completed',
-    transactionId: mcpTransaction.transactionId || '',
-    receiptNumber: mcpTransaction.receiptNumber || '',
-    change: 0
+    id: t._id ?? `sale_${index}`,
+    date: String(t.createdAt ?? new Date().toISOString()),
+    customer: String(t.customerName ?? 'Walk-in Customer'),
+    items: items.map((item: unknown, i: number) => {
+      const it = asMcpRecord(item);
+      return {
+        product: {
+          id: it.productId ?? `product_${i}`,
+          name: String(it.productName ?? ''),
+          price: typeof it.unitPrice === 'number' ? it.unitPrice : Number(it.unitPrice) || 0,
+          category: String(it.category ?? 'General'),
+        },
+        quantity: typeof it.quantity === 'number' ? it.quantity : Number(it.quantity) || 0,
+      };
+    }),
+    subtotal: typeof t.subtotal === 'number' ? t.subtotal : Number(t.subtotal) || 0,
+    tax: typeof t.tax === 'number' ? t.tax : Number(t.tax) || 0,
+    discount: typeof t.discount === 'number' ? t.discount : Number(t.discount) || 0,
+    total: typeof t.total === 'number' ? t.total : Number(t.total) || 0,
+    paymentMethod: String(t.paymentMethod ?? 'cash'),
+    status: String(t.paymentStatus ?? 'completed'),
+    transactionId: String(t.transactionId ?? ''),
+    receiptNumber: String(t.receiptNumber ?? ''),
+    change: 0,
   };
 };
 

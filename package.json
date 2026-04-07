@@ -1,7 +1,7 @@
 {
   "name": "bizneai",
   "private": true,
-  "version": "1.0.3",
+  "version": "1.0.13",
   "description": "Sistema de Punto de Venta Moderno con Tickets Virtuales",
   "author": {
     "name": "BizneAI Team",
@@ -21,29 +21,30 @@
     "dev:server": "tsx watch server/src/index.ts",
     "dev:full": "concurrently \"npm run dev\" \"wait-on tcp:localhost:5173 tcp:localhost:3000 && electron .\"",
     "build": "tsc -b && vite build",
+    "build:server": "node scripts/bundle-server.mjs",
     "lint": "eslint .",
     "preview": "vite preview",
     "electron": "electron .",
     "electron:dev": "concurrently \"npm run dev\" \"wait-on tcp:localhost:5173 tcp:localhost:3000 && electron .\"",
     "electron:dev:pos": "concurrently \"npm run dev:client\" \"wait-on tcp:localhost:5173 && electron .\"",
-    "start": "npm run build && electron .",
-    "electron:build": "npm run build && electron-builder",
-    "dist": "npm run bump-version && npm run build && electron-builder",
-    "dist:mac": "npm run bump-version && npm run fix-deps && npm run build && electron-builder --mac",
-    "dist:win": "npm run bump-version && npm run fix-deps && npm run build && electron-builder --win",
-    "dist:linux": "npm run bump-version && npm run fix-deps && npm run build && electron-builder --linux",
-    "pack": "npm run build && electron-builder --dir",
-    "pack:mac": "npm run bump-version && npm run build && electron-builder --dir --mac",
-    "pack:win": "npm run bump-version && npm run build && electron-builder --dir --win",
+    "start": "npm run build && npm run build:server && electron .",
+    "electron:build": "npm run build && npm run build:server && electron-builder",
+    "dist": "npm run bump-version && npm run build && npm run build:server && electron-builder",
+    "dist:mac": "npm run bump-version && npm run fix-deps && npm run build && npm run build:server && electron-builder --mac",
+    "dist:win": "npm run bump-version && npm run fix-deps && npm run build && npm run build:server && electron-builder --win",
+    "dist:linux": "npm run bump-version && npm run fix-deps && npm run build && npm run build:server && electron-builder --linux",
+    "pack": "npm run build && npm run build:server && electron-builder --dir",
+    "pack:mac": "npm run bump-version && npm run build && npm run build:server && electron-builder --dir --mac",
+    "pack:win": "npm run bump-version && npm run build && npm run build:server && electron-builder --dir --win",
     "fix-deps": "node scripts/fix-dependencies.cjs",
     "bump-version": "node scripts/bump-version.cjs",
     "start:all": "concurrently \"npm run dev\" \"wait-on tcp:localhost:5173 tcp:localhost:3000 && electron .\"",
     "generate-icons": "node scripts/generate-icons.js",
     "build-desktop": "node scripts/build-desktop.js",
-    "build-desktop:mac": "npm run bump-version && npm run fix-deps && npm run build && electron-builder --mac",
-    "build-desktop:win": "npm run bump-version && npm run fix-deps && npm run build && electron-builder --win",
-    "build-desktop:linux": "npm run bump-version && npm run fix-deps && npm run build && electron-builder --linux",
-    "build-desktop:all": "npm run bump-version && npm run fix-deps && npm run build && electron-builder -mwl",
+    "build-desktop:mac": "npm run bump-version && npm run fix-deps && npm run build && npm run build:server && electron-builder --mac",
+    "build-desktop:win": "npm run bump-version && npm run fix-deps && npm run build && npm run build:server && electron-builder --win",
+    "build-desktop:linux": "npm run bump-version && npm run fix-deps && npm run build && npm run build:server && electron-builder --linux",
+    "build-desktop:all": "npm run bump-version && npm run fix-deps && npm run build && npm run build:server && electron-builder -mwl",
     "build-win-simple": "node scripts/build-win-simple.js"
   },
   "dependencies": {
@@ -54,6 +55,7 @@
     "chalk": "^5.4.1",
     "cloudinary": "^2.7.0",
     "cors": "^2.8.5",
+    "electron-pos-printer": "^1.3.8",
     "express": "^5.1.0",
     "express-rate-limit": "^7.5.0",
     "express-validator": "^7.2.1",
@@ -86,6 +88,7 @@
     "concurrently": "^8.2.2",
     "electron": "^40.6.0",
     "electron-builder": "^26.8.1",
+    "esbuild": "^0.28.0",
     "eslint": "^10.0.1",
     "eslint-plugin-react-hooks": "^5.2.0",
     "eslint-plugin-react-refresh": "^0.4.20",
@@ -112,6 +115,7 @@
     },
     "files": [
       "dist/**/*",
+      "dist-backend/**/*",
       "electron/**/*",
       "node_modules/**/*",
       "package.json",
@@ -127,6 +131,13 @@
       {
         "from": "public",
         "to": "public"
+      },
+      {
+        "from": "embedded-node",
+        "to": "embedded-node",
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "asar": true,
@@ -153,7 +164,8 @@
       "node_modules/zod/**/*",
       "node_modules/quagga/**/*",
       "node_modules/lucide-react/**/*",
-      "node_modules/react-hot-toast/**/*"
+      "node_modules/react-hot-toast/**/*",
+      "node_modules/electron-pos-printer/**/*"
     ],
     "nodeGypRebuild": false,
     "buildDependenciesFromSource": false,

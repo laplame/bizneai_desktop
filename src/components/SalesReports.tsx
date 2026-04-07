@@ -4,13 +4,11 @@ import {
   TrendingUp, 
   DollarSign, 
   ShoppingCart, 
-  Calendar,
-  Filter,
+  Users,
   Download,
   RefreshCw,
-  Eye,
+  Printer,
   FileText,
-  PieChart,
   Activity,
   X,
   History,
@@ -18,7 +16,6 @@ import {
   CheckCircle,
   AlertCircle,
   Copy,
-  Link as LinkIcon,
   Layers,
   CloudDownload
 } from 'lucide-react';
@@ -27,42 +24,64 @@ import {
   Transaction,
   DailyBlock,
   MerkleProof,
-  generateTransactionHash,
-  createDailyBlock,
   buildMerkleTree,
   generateMerkleProof,
   verifyMerkleProof,
   verifyBlockIntegrity,
-  verifyChainIntegrity
 } from '../utils/merkleTree';
-import { useDatabase } from '../hooks/useDatabase';
-import { getTransactionsFromMcp, mapMcpTransactionToSale, isShopIdConfigured } from '../utils/shopIdHelper';
+import {
+  getTransactions,
+  getDailyBlocks,
+  generateDailyBlock,
+  getLastBlockGeneration,
+  verifyChainIntegrityService,
+} from '../services/merkleTreeService';
+import { syncUnsentBlocksToServer } from '../services/blockApiService';
+import { getTransactionsFromMcp, isShopIdConfigured } from '../utils/shopIdHelper';
+import {
+  type SaleReportRow,
+  mapMcpToSaleRow,
+  mapMerkleTransactionToSaleRow,
+  mergeSaleRows,
+  saleRowToRecoveryPayload,
+} from '../utils/salesRecovery';
+import type { RecoveredSalePayload } from '../types/salesRecovery';
+import { printReceiptThermalOrDialog, resolveStoreNameForPrint } from '../services/receiptPrintService';
+import { computeCartTaxBreakdownFromCartItems, loadTaxSettings } from '../utils/taxSettings';
+import type { RegistryCustomer } from '../types/customerRegistry';
+import {
+  loadCustomers,
+  getCustomerFullName,
+  getCustomerStatusLabel,
+} from '../services/customerRegistry';
+import {
+  fetchSessionEventsMerged,
+  fetchSaleCashierMerged,
+  getActivityShopId,
+  type LocalSessionEvent,
+  type LocalSaleCashierEvent,
+} from '../services/localActivityLog';
 
-interface Sale {
-  id: number;
-  date: string;
-  items: Array<{
-    product: {
-      id: number;
-      name: string;
-      price: number;
-      category: string;
-    };
-    quantity: number;
-  }>;
-  total: number;
-  paymentMethod: string;
-  change: number;
+/** Caché de la vista Stats (evita recalcular sin cambio de ventas) */
+interface SalesStatsCache {
+  totalSales: number;
+  totalRevenue: number;
+  averageOrderValue: number;
+  totalTickets: number;
+  paymentMethodStats: Record<string, number>;
+  topProducts: Array<[string, { quantity: number; revenue: number }]>;
 }
 
 interface SalesReportsProps {
   isOpen: boolean;
   onClose: () => void;
+  /** Recupera la venta en el carrito del POS para editar y volver a cobrar */
+  onRecoverSaleToCart?: (payload: RecoveredSalePayload) => void;
 }
 
 // Datos de ejemplo para ventas
-const generateSampleSales = (): Sale[] => {
-  const sales: Sale[] = [];
+const generateSampleSales = (): SaleReportRow[] => {
+  const sales: SaleReportRow[] = [];
   const products = [
     { id: 1, name: 'Café Americano', price: 2.50, category: 'Bebidas' },
     { id: 2, name: 'Café Latte', price: 3.50, category: 'Bebidas' },
@@ -102,32 +121,38 @@ const generateSampleSales = (): Sale[] => {
       items,
       total: total * 1.16, // Con IVA
       paymentMethod: paymentMethods[Math.floor(Math.random() * paymentMethods.length)],
-      change: Math.random() > 0.7 ? Math.floor(Math.random() * 10) : 0
+      change: Math.random() > 0.7 ? Math.floor(Math.random() * 10) : 0,
+      source: 'sample',
     });
   }
   
   return sales.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 };
 
-const SalesReports = ({ isOpen, onClose }: SalesReportsProps) => {
-  const { 
-    getTransactions, 
-    getTransactionsByDate, 
-    addTransaction,
-    getBlocks, 
-    getBlockById,
-    getLastBlock,
-    addBlock 
-  } = useDatabase();
-  
-  const [sales, setSales] = useState<Sale[]>([]);
-  const [filteredSales, setFilteredSales] = useState<Sale[]>([]);
+const mergeWithLocalMerkle = (remote: SaleReportRow[]): SaleReportRow[] => {
+  const merkleSales = getTransactions()
+    .filter((tx) => tx.action === 'create')
+    .map(mapMerkleTransactionToSaleRow)
+    .filter((s): s is SaleReportRow => s !== null);
+  return mergeSaleRows(merkleSales, remote);
+};
+
+const SalesReports = ({ isOpen, onClose, onRecoverSaleToCart }: SalesReportsProps) => {
+  const [sales, setSales] = useState<SaleReportRow[]>([]);
+  const [filteredSales, setFilteredSales] = useState<SaleReportRow[]>([]);
+  const [printingKey, setPrintingKey] = useState<string | null>(null);
   const [dateRange, setDateRange] = useState('7d');
   const [paymentMethod, setPaymentMethod] = useState('all');
   const [category, setCategory] = useState('all');
-  const [view, setView] = useState<'summary' | 'detailed' | 'analytics' | 'history' | 'stats'>('summary');
+  const [view, setView] = useState<
+    'summary' | 'detailed' | 'analytics' | 'history' | 'stats' | 'customers' | 'activity'
+  >('summary');
+  const [sessionEvents, setSessionEvents] = useState<LocalSessionEvent[]>([]);
+  const [saleCashierEvents, setSaleCashierEvents] = useState<LocalSaleCashierEvent[]>([]);
+  const [activityLoading, setActivityLoading] = useState(false);
+  const [registryCustomers, setRegistryCustomers] = useState<RegistryCustomer[]>([]);
   const [isStatsLoading, setIsStatsLoading] = useState(false);
-  const [statsCache, setStatsCache] = useState<any>(null);
+  const [statsCache, setStatsCache] = useState<SalesStatsCache | null>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [blocks, setBlocks] = useState<DailyBlock[]>([]);
   const [selectedBlock, setSelectedBlock] = useState<DailyBlock | null>(null);
@@ -135,6 +160,7 @@ const SalesReports = ({ isOpen, onClose }: SalesReportsProps) => {
   const [merkleProof, setMerkleProof] = useState<MerkleProof | null>(null);
   const [isGeneratingBlock, setIsGeneratingBlock] = useState(false);
   const [isVerifying, setIsVerifying] = useState(false);
+  const [selectedBlockDate, setSelectedBlockDate] = useState(() => new Date().toISOString().split('T')[0]);
   const [verificationResult, setVerificationResult] = useState<{ valid: boolean; errors: string[] } | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
@@ -151,22 +177,21 @@ const SalesReports = ({ isOpen, onClose }: SalesReportsProps) => {
       const mcpTransactions = await getTransactionsFromMcp();
       
       if (mcpTransactions && mcpTransactions.length > 0) {
-        const mappedSales = mcpTransactions.map((t: any, index: number) => mapMcpTransactionToSale(t, index));
-        setSales(mappedSales);
-        setFilteredSales(mappedSales);
-        toast.success(`${mappedSales.length} ventas cargadas desde el servidor`, { id: 'loading-sales' });
+        const mappedSales = mcpTransactions.map((t: unknown, index: number) => mapMcpToSaleRow(t, index));
+        const merged = mergeWithLocalMerkle(mappedSales);
+        setSales(merged);
+        setFilteredSales(merged);
+        toast.success(`${merged.length} ventas cargadas (servidor + locales)`, { id: 'loading-sales' });
       } else {
-        // Si no hay transacciones en el servidor, usar ventas de muestra
-        const sampleSales = generateSampleSales();
+        const sampleSales = mergeWithLocalMerkle(generateSampleSales());
         setSales(sampleSales);
         setFilteredSales(sampleSales);
-        toast.success('No hay ventas en el servidor. Mostrando ventas de muestra', { id: 'loading-sales' });
+        toast.success('No hay ventas en el servidor. Mostrando muestra y ventas locales', { id: 'loading-sales' });
       }
     } catch (error) {
       console.error('Error loading sales from server:', error);
       toast.error('Error al cargar ventas desde el servidor', { id: 'loading-sales' });
-      // Fallback a ventas de muestra
-      const sampleSales = generateSampleSales();
+      const sampleSales = mergeWithLocalMerkle(generateSampleSales());
       setSales(sampleSales);
       setFilteredSales(sampleSales);
     } finally {
@@ -176,44 +201,65 @@ const SalesReports = ({ isOpen, onClose }: SalesReportsProps) => {
 
   useEffect(() => {
     if (isOpen) {
-      // Intentar cargar desde el servidor primero
       if (isShopIdConfigured()) {
         loadSalesFromServer();
+        syncUnsentBlocksToServer().then(({ sent }) => {
+          if (sent > 0) toast.success(`${sent} bloque(s) sincronizado(s) con el servidor`);
+        });
       } else {
-        // Si no hay shopId configurado, usar ventas de muestra
-      const sampleSales = generateSampleSales();
-      setSales(sampleSales);
-      setFilteredSales(sampleSales);
+        const sampleSales = mergeWithLocalMerkle(generateSampleSales());
+        setSales(sampleSales);
+        setFilteredSales(sampleSales);
       }
       loadTransactionsAndBlocks();
     }
   }, [isOpen]);
 
+  useEffect(() => {
+    const refresh = () => setRegistryCustomers(loadCustomers());
+    refresh();
+    window.addEventListener('customers-updated', refresh);
+    return () => window.removeEventListener('customers-updated', refresh);
+  }, []);
+
+  useEffect(() => {
+    if (!isOpen || view !== 'activity') return;
+    const shopId = getActivityShopId();
+    let cancelled = false;
+    (async () => {
+      setActivityLoading(true);
+      try {
+        const [s, v] = await Promise.all([
+          fetchSessionEventsMerged(shopId),
+          fetchSaleCashierMerged(shopId),
+        ]);
+        if (!cancelled) {
+          setSessionEvents(s);
+          setSaleCashierEvents(v);
+        }
+      } catch {
+        if (!cancelled) {
+          setSessionEvents([]);
+          setSaleCashierEvents([]);
+        }
+      } finally {
+        if (!cancelled) setActivityLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, view]);
+
   const loadTransactionsAndBlocks = async () => {
     setIsLoading(true);
     try {
-      // La aplicación usa base de datos local, no API
-      // Intentar cargar desde la base de datos local
-      try {
-      const dbTransactions = await getTransactions(1000);
-      const dbBlocks = await getBlocks(100);
-      
-        setTransactions(dbTransactions || []);
-        setBlocks(dbBlocks || []);
-      
-      // If no transactions exist, generate from sample sales
-        if ((dbTransactions || []).length === 0) {
-        await generateTransactionsFromSales();
-        }
-      } catch (dbError) {
-        // Si hay error con la base de datos, usar arrays vacíos
-        console.warn('Database not available, using empty arrays:', dbError);
-        setTransactions([]);
-        setBlocks([]);
-      }
+      const txList = getTransactions();
+      const blockList = getDailyBlocks();
+      setTransactions(txList);
+      setBlocks(blockList);
     } catch (error) {
       console.error('Error loading transactions and blocks:', error);
-      // No mostrar error al usuario, solo usar arrays vacíos
       setTransactions([]);
       setBlocks([]);
     } finally {
@@ -221,64 +267,20 @@ const SalesReports = ({ isOpen, onClose }: SalesReportsProps) => {
     }
   };
 
-  const generateTransactionsFromSales = async () => {
-    const sampleSales = generateSampleSales();
-    const newTransactions: Transaction[] = [];
-    
-    for (const sale of sampleSales) {
-      const transaction: Omit<Transaction, 'hash'> = {
-        id: `tx_${sale.id}_${Date.now()}`,
-        saleId: sale.id,
-        action: 'create',
-        timestamp: sale.date,
-        data: sale
-      };
-      
-      const hash = await generateTransactionHash(transaction);
-      const fullTransaction = { ...transaction, hash };
-      newTransactions.push(fullTransaction);
-      
-      // Save to database
-      try {
-        await addTransaction(fullTransaction);
-      } catch (error) {
-        console.error('Error saving transaction:', error);
-      }
-    }
-    
-    setTransactions(newTransactions);
-  };
-
   const handleGenerateDailyBlock = async (date: string) => {
     setIsGeneratingBlock(true);
     try {
-      const dayTransactions = transactions.filter(tx => {
-        const txDate = new Date(tx.timestamp).toISOString().split('T')[0];
-        return txDate === date;
-      });
-
-      if (dayTransactions.length === 0) {
-        toast.error('No hay transacciones para esta fecha');
-        setIsGeneratingBlock(false);
-        return;
+      const newBlock = await generateDailyBlock(date);
+      if (newBlock) {
+        const txCount = newBlock.transactions.length;
+        setBlocks(getDailyBlocks());
+        setTransactions(getTransactions());
+        toast.success(`Bloque generado para ${date} con ${txCount} transacciones${txCount > 0 ? ' • +50 LUX' : ''}`);
+        await syncUnsentBlocksToServer();
       }
-
-      const lastBlock = blocks.length > 0 ? blocks[blocks.length - 1] : null;
-      const previousBlockHash = lastBlock ? lastBlock.blockHash : null;
-
-      const newBlock = await createDailyBlock(date, dayTransactions, previousBlockHash);
-      
-      // Save to database
-      await addBlock(newBlock);
-      
-      // Reload blocks from database
-      const updatedBlocks = await getBlocks(100);
-      setBlocks(updatedBlocks);
-      
-      toast.success(`Bloque generado para ${date} con ${dayTransactions.length} transacciones`);
     } catch (error) {
       console.error('Error generating block:', error);
-      toast.error('Error al generar el bloque');
+      toast.error(error instanceof Error ? error.message : 'Error al generar el bloque');
     } finally {
       setIsGeneratingBlock(false);
     }
@@ -287,40 +289,20 @@ const SalesReports = ({ isOpen, onClose }: SalesReportsProps) => {
   const handleVerifyTransaction = async (transaction: Transaction) => {
     setIsVerifying(true);
     try {
-      // Find block containing this transaction
-      let block = blocks.find(b => 
-        b.transactions.some(tx => tx.id === transaction.id)
-      );
-      
-      // If not in memory, load from database
-      if (!block) {
-        const allBlocks = await getBlocks(100);
-        block = allBlocks.find(b => 
-          b.transactions.some(tx => tx.id === transaction.id)
-        );
-      }
-      
+      const block = blocks.find((b) => b.transactions.some((tx) => tx.id === transaction.id));
       if (!block) {
         toast.error('Transacción no encontrada en ningún bloque');
         setIsVerifying(false);
         return;
       }
-      
-      // Load full block data if needed
-      if (!block.transactions || block.transactions.length === 0) {
-        const fullBlock = await getBlockById(block.id);
-        if (fullBlock) {
-          block = fullBlock;
-        }
-      }
 
       const { tree } = await buildMerkleTree(block.transactions);
       const proof = generateMerkleProof(transaction.hash, block.transactions, tree);
       const isValid = await verifyMerkleProof(proof);
-      
+
       setMerkleProof(proof);
       setVerificationResult({ valid: isValid, errors: isValid ? [] : ['La prueba de Merkle no es válida'] });
-      
+
       if (isValid) {
         toast.success('Transacción verificada correctamente');
       } else {
@@ -364,9 +346,9 @@ const SalesReports = ({ isOpen, onClose }: SalesReportsProps) => {
         return;
       }
 
-      const result = await verifyChainIntegrity(blocks);
+      const result = await verifyChainIntegrityService();
       setVerificationResult(result);
-      
+
       if (result.valid) {
         toast.success('Cadena verificada correctamente');
       } else {
@@ -384,6 +366,64 @@ const SalesReports = ({ isOpen, onClose }: SalesReportsProps) => {
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
     toast.success('Copiado al portapapeles');
+  };
+
+  const handlePrintSale = async (sale: SaleReportRow) => {
+    const k = `${String(sale.id)}-${sale.date}`;
+    if (printingKey === k) return;
+    setPrintingKey(k);
+    try {
+      const taxSettings = loadTaxSettings();
+      const lineRows = sale.items.map((item) => ({
+        itemTotal: item.product.price * item.quantity,
+        product: {
+          priceIncludesTax: (item.product as { priceIncludesTax?: boolean }).priceIncludesTax,
+          taxExempt: (item.product as { taxExempt?: boolean }).taxExempt,
+        },
+      }));
+      const { subtotalExclTax, taxAmount, total: computedTotal } = computeCartTaxBreakdownFromCartItems(
+        lineRows,
+        taxSettings
+      );
+      const subtotal = sale.subtotal ?? subtotalExclTax;
+      const tax = sale.tax ?? taxAmount;
+      const total = sale.total ?? computedTotal;
+
+      const r = await printReceiptThermalOrDialog({
+        storeName: resolveStoreNameForPrint(),
+        saleId: String(sale.id),
+        ticketKind: 'sale',
+        date: new Date(sale.date).toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' }),
+        items: sale.items.map((i) => ({
+          productName: i.product.name,
+          quantity: i.quantity,
+          unitPrice: i.product.price,
+          totalPrice: i.product.price * i.quantity,
+        })),
+        subtotal,
+        tax,
+        total,
+        paymentMethod: sale.paymentMethod,
+      });
+      if (r.success) {
+        toast.success('Ticket enviado o abierto el cuadro de impresión');
+      } else {
+        toast.error(r.error || 'No se pudo imprimir');
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Error al imprimir');
+    } finally {
+      setPrintingKey(null);
+    }
+  };
+
+  const handleRecoverSale = (sale: SaleReportRow) => {
+    if (!onRecoverSaleToCart) {
+      toast.error('Conecta esta pantalla al POS desde la app principal');
+      return;
+    }
+    onRecoverSaleToCart(saleRowToRecoveryPayload(sale));
+    onClose();
   };
 
   const getTodayDate = () => {
@@ -591,6 +631,12 @@ const SalesReports = ({ isOpen, onClose }: SalesReportsProps) => {
 
   const renderDetailed = () => (
     <div className="reports-detailed">
+      <p style={{ marginBottom: '1rem', color: 'var(--bs-dark-text-muted, #64748b)', fontSize: '0.9rem' }}>
+        Incluye ventas del servidor (si está configurado), <strong>registro local Merkle</strong> y muestras. Usa{' '}
+        <Printer size={14} style={{ verticalAlign: 'text-bottom' }} /> para imprimir o PDF y{' '}
+        <ShoppingCart size={14} style={{ verticalAlign: 'text-bottom' }} /> para cargar la venta al carrito y volver a
+        cobrar (nueva venta).
+      </p>
       <div className="sales-table-container">
         <table className="sales-table">
           <thead>
@@ -604,8 +650,11 @@ const SalesReports = ({ isOpen, onClose }: SalesReportsProps) => {
             </tr>
           </thead>
           <tbody>
-            {filteredSales.map(sale => (
-              <tr key={sale.id}>
+            {filteredSales.map((sale) => {
+              const rowKey = `${String(sale.id)}-${sale.date}`;
+              const isPrinting = printingKey === rowKey;
+              return (
+              <tr key={rowKey}>
                 <td>#{sale.id}</td>
                 <td>{new Date(sale.date).toLocaleDateString()}</td>
                 <td>
@@ -627,15 +676,28 @@ const SalesReports = ({ isOpen, onClose }: SalesReportsProps) => {
                   </span>
                 </td>
                 <td>
-                  <button className="action-btn" title="Ver detalles">
-                    <Eye size={16} />
+                  <button
+                    type="button"
+                    className="action-btn"
+                    title="Imprimir ticket (térmica o PDF)"
+                    disabled={isPrinting}
+                    onClick={() => void handlePrintSale(sale)}
+                  >
+                    <Printer size={16} />
                   </button>
-                  <button className="action-btn" title="Generar ticket">
-                    <FileText size={16} />
+                  <button
+                    type="button"
+                    className="action-btn"
+                    title="Cargar al carrito para editar y cobrar de nuevo"
+                    disabled={!onRecoverSaleToCart}
+                    onClick={() => handleRecoverSale(sale)}
+                  >
+                    <ShoppingCart size={16} />
                   </button>
                 </td>
               </tr>
-            ))}
+            );
+            })}
           </tbody>
         </table>
       </div>
@@ -854,16 +916,46 @@ const SalesReports = ({ isOpen, onClose }: SalesReportsProps) => {
     );
   };
 
+  const cooldownRemaining = () => {
+    const last = getLastBlockGeneration();
+    if (!last) return 0;
+    const elapsed = Date.now() - last;
+    return Math.max(0, Math.ceil((COOLDOWN_MS - elapsed) / 60000));
+  };
+
+  const COOLDOWN_MS = 60 * 60 * 1000; // 1 hora
+  const canGenerateBlock = cooldownRemaining() === 0;
+  const cooldownMins = cooldownRemaining();
+
+  const blockDateOptions = [getTodayDate(), ...getUniqueDates().filter((d) => d !== getTodayDate())];
+
   const renderHistory = () => (
     <div className="reports-history">
       <div className="history-header">
         <div className="history-actions">
+          <select
+            className="date-select"
+            value={selectedBlockDate}
+            onChange={(e) => setSelectedBlockDate(e.target.value)}
+            style={{ marginRight: 8 }}
+          >
+            {blockDateOptions.map((d) => (
+              <option key={d} value={d}>
+                {d}
+              </option>
+            ))}
+          </select>
           <button
             className="btn-primary"
-            onClick={() => handleGenerateDailyBlock(getTodayDate())}
-            disabled={isGeneratingBlock}
+            onClick={() => handleGenerateDailyBlock(selectedBlockDate)}
+            disabled={isGeneratingBlock || !canGenerateBlock}
+            title={!canGenerateBlock ? `Cooldown: espera ${cooldownMins} min` : ''}
           >
-            {isGeneratingBlock ? 'Generando...' : 'Generar Bloque Diario'}
+            {isGeneratingBlock
+              ? 'Generando...'
+              : !canGenerateBlock
+                ? `Cooldown ${cooldownMins} min`
+                : 'Generar Bloque Diario'}
           </button>
           <button
             className="btn-secondary"
@@ -1099,6 +1191,162 @@ const SalesReports = ({ isOpen, onClose }: SalesReportsProps) => {
     </div>
   );
 
+  const renderCustomers = () => (
+    <div className="reports-detailed">
+      <p style={{ marginBottom: '1rem', color: 'var(--bs-dark-text-muted, #64748b)', fontSize: '0.9rem' }}>
+        Listado local de clientes. El <strong>estado</strong> (Nuevo, Activo, Frecuente, VIP, Inactivo) se recalcula al
+        completar una venta desde el carrito con un cliente del listado.
+      </p>
+      <div className="sales-table-container">
+        <table className="sales-table">
+          <thead>
+            <tr>
+              <th>Cliente</th>
+              <th>Estado</th>
+              <th>Pedidos</th>
+              <th>Total gastado</th>
+              <th>Última compra</th>
+            </tr>
+          </thead>
+          <tbody>
+            {registryCustomers.length === 0 ? (
+              <tr>
+                <td colSpan={5} style={{ textAlign: 'center', padding: '1.5rem' }}>
+                  No hay clientes en el registro. Gestiona clientes en el menú Clientes.
+                </td>
+              </tr>
+            ) : (
+              registryCustomers.map((c) => (
+                <tr key={c.id}>
+                  <td>{getCustomerFullName(c)}</td>
+                  <td>
+                    <span style={{ fontWeight: 600, color: 'var(--bs-primary, #3b82f6)' }}>
+                      {getCustomerStatusLabel(c.customerStatus)}
+                    </span>
+                  </td>
+                  <td>{c.totalOrders}</td>
+                  <td>${c.totalSpent.toFixed(2)}</td>
+                  <td>{c.lastPurchase ? new Date(c.lastPurchase).toLocaleString('es-MX') : '—'}</td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+
+  const renderActivity = () => (
+    <div className="reports-detailed">
+      <p style={{ marginBottom: '1rem', color: 'var(--bs-dark-text-muted, #64748b)', fontSize: '0.9rem' }}>
+        Historial de <strong>accesos con PIN</strong> (desbloqueo / bloqueo) y <strong>ventas por usuario</strong> de la
+        sesión. Con el servidor local activo (`npm run dev:server`) los datos se guardan también en{' '}
+        <code>server/data/local-activity.db</code>; siempre hay copia en localStorage como respaldo.
+      </p>
+      {getActivityShopId() === 'local-unconfigured' ? (
+        <p style={{ color: '#b45309' }}>
+          Configura el Shop ID en Configuración para etiquetar el registro con tu tienda (los datos locales siguen
+          guardándose).
+        </p>
+      ) : null}
+      {activityLoading ? (
+        <p style={{ color: 'var(--bs-dark-text-muted)' }}>Cargando actividad…</p>
+      ) : (
+        <>
+          <h4 style={{ marginTop: '0.5rem', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Shield size={18} /> Sesiones (PIN)
+          </h4>
+          <div className="sales-table-container" style={{ marginBottom: '1.5rem' }}>
+            <table className="sales-table">
+              <thead>
+                <tr>
+                  <th>Fecha</th>
+                  <th>Evento</th>
+                  <th>Usuario / rol</th>
+                  <th>Origen</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sessionEvents.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} style={{ textAlign: 'center', padding: '1rem' }}>
+                      Sin eventos de sesión aún.
+                    </td>
+                  </tr>
+                ) : (
+                  sessionEvents.map((e) => (
+                    <tr key={e.id}>
+                      <td>{new Date(e.created_at).toLocaleString('es-MX')}</td>
+                      <td>{e.event_type === 'unlock' ? 'Desbloqueo' : 'Bloqueo'}</td>
+                      <td>
+                        {[e.name, e.role].filter(Boolean).join(' · ') || e.email || '—'}
+                      </td>
+                      <td>
+                        {e.source === 'legacy'
+                          ? 'Código legacy'
+                          : e.source === 'super'
+                            ? 'Superusuario'
+                            : 'Rol'}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+          <h4 style={{ marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <ShoppingCart size={18} /> Ventas por cajero
+          </h4>
+          <div className="sales-table-container">
+            <table className="sales-table">
+              <thead>
+                <tr>
+                  <th>Fecha</th>
+                  <th>Total</th>
+                  <th>Pago</th>
+                  <th>Cajero</th>
+                  <th>Transacción</th>
+                  <th>Ítems</th>
+                </tr>
+              </thead>
+              <tbody>
+                {saleCashierEvents.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} style={{ textAlign: 'center', padding: '1rem' }}>
+                      Sin ventas registradas con cajero aún.
+                    </td>
+                  </tr>
+                ) : (
+                  saleCashierEvents.map((s) => (
+                    <tr key={s.id}>
+                      <td>{new Date(s.created_at).toLocaleString('es-MX')}</td>
+                      <td>${Number(s.total).toFixed(2)}</td>
+                      <td>{s.payment_method || '—'}</td>
+                      <td>
+                        {[s.cashier_name, s.cashier_role].filter(Boolean).join(' · ') ||
+                          (s.cashier_source === 'legacy'
+                            ? 'Código legacy'
+                            : s.cashier_source === 'super'
+                              ? 'Superusuario'
+                              : '—')}
+                      </td>
+                      <td>
+                        <code style={{ fontSize: '0.75rem' }}>{s.transaction_id || '—'}</code>
+                      </td>
+                      <td style={{ maxWidth: 220, fontSize: '0.8rem', wordBreak: 'break-word' }}>
+                        {s.items_summary || '—'}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </div>
+  );
+
   if (!isOpen) return null;
 
   return (
@@ -1206,6 +1454,20 @@ const SalesReports = ({ isOpen, onClose }: SalesReportsProps) => {
               <History size={20} />
               Historia
             </button>
+            <button
+              className={`view-tab ${view === 'customers' ? 'active' : ''}`}
+              onClick={() => setView('customers')}
+            >
+              <Users size={20} />
+              Clientes
+            </button>
+            <button
+              className={`view-tab ${view === 'activity' ? 'active' : ''}`}
+              onClick={() => setView('activity')}
+            >
+              <Shield size={20} />
+              Actividad
+            </button>
           </div>
 
           {/* Contenido de la vista */}
@@ -1215,6 +1477,8 @@ const SalesReports = ({ isOpen, onClose }: SalesReportsProps) => {
             {view === 'detailed' && renderDetailed()}
             {view === 'analytics' && renderAnalytics()}
             {view === 'history' && renderHistory()}
+            {view === 'customers' && renderCustomers()}
+            {view === 'activity' && renderActivity()}
           </div>
         </div>
       </div>

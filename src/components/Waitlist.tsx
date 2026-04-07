@@ -26,6 +26,7 @@ import {
 import { toast } from 'react-hot-toast';
 import { waitlistAPI } from '../api/waitlist';
 import { useStore } from '../contexts/StoreContext';
+import { scheduleMirrorKeyToSqlite } from '../services/posPersistService';
 
 interface WaitlistItem {
   product: {
@@ -222,6 +223,7 @@ const Waitlist: React.FC<WaitlistProps> = ({ isOpen, onClose, onLoadToCart }) =>
             setEntries(filteredEntries);
             // Guardar también en localStorage
             localStorage.setItem('bizneai-waitlist', JSON.stringify(filteredEntries));
+            scheduleMirrorKeyToSqlite('bizneai-waitlist');
           }
         } catch (error) {
           console.error('Error loading from server, using local:', error);
@@ -237,6 +239,7 @@ const Waitlist: React.FC<WaitlistProps> = ({ isOpen, onClose, onLoadToCart }) =>
 
   const saveLocalWaitlist = (newEntries: WaitlistEntry[]) => {
     localStorage.setItem('bizneai-waitlist', JSON.stringify(newEntries));
+    scheduleMirrorKeyToSqlite('bizneai-waitlist');
   };
 
   const handleAddToWaitlist = async () => {

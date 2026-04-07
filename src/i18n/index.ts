@@ -54,6 +54,19 @@ const resources = {
         notes: 'Notas (ej. sin hielo, leche de almendras)',
         notesPlaceholder: 'Instrucciones especiales para este producto...',
         total: 'Total'
+      },
+      persistence: {
+        connected: 'Persistencia local: conectada',
+        disconnected: 'Persistencia local: desconectada',
+        checking: 'Comprobando…',
+        titleConnected: 'El API en este equipo guarda datos en disco (SQLite). Las fotos del catálogo pueden servirse en local tras sincronizar.',
+        titleDisconnected: 'Sin API local o sin base en disco: los datos solo viven en el navegador hasta que vuelva el servicio.',
+        catalogOnline: 'Catálogo en línea',
+        catalogOffline: 'Catálogo sin conexión',
+        catalogChecking: 'Comprobando catálogo…',
+        titleCatalogOnline: 'El servidor MCP responde; puedes sincronizar el catálogo.',
+        titleCatalogOffline: 'No se alcanza el MCP (red o servidor). Seguirás con los datos ya descargados.',
+        photosCachedToast: 'Se guardaron {{count}} fotos en disco para verlas sin conexión'
       }
     }
   },
@@ -106,6 +119,19 @@ const resources = {
         notes: 'Notes (e.g. no ice, almond milk)',
         notesPlaceholder: 'Special instructions for this product...',
         total: 'Total'
+      },
+      persistence: {
+        connected: 'Local persistence: connected',
+        disconnected: 'Local persistence: disconnected',
+        checking: 'Checking…',
+        titleConnected: 'The local API is saving data to disk (SQLite). Catalog photos can be served locally after sync.',
+        titleDisconnected: 'No local API or database: data stays in the browser until the service is available again.',
+        catalogOnline: 'Catalog online',
+        catalogOffline: 'Catalog offline',
+        catalogChecking: 'Checking catalog…',
+        titleCatalogOnline: 'MCP server is reachable; you can sync the catalog.',
+        titleCatalogOffline: 'Cannot reach MCP (network or server). You can keep working with cached data.',
+        photosCachedToast: '{{count}} product photos saved locally for offline viewing'
       }
     }
   }

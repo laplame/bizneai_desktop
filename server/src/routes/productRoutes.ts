@@ -2,16 +2,15 @@ import express from 'express';
 import { z } from 'zod';
 import multer from 'multer';
 import path from 'path';
-import { fileURLToPath } from 'url';
+import { ensureBizneaiDataDir } from '../dataPaths';
 
 const router = express.Router();
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 // Multer configuration for file uploads
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, path.join(__dirname, '../../uploads/products'));
+    const dir = path.join(ensureBizneaiDataDir(), 'uploads', 'products');
+    cb(null, dir);
   },
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
@@ -50,7 +49,11 @@ const createProductSchema = z.object({
   stock: z.number().int().min(0, 'Stock must be non-negative'),
   sku: z.string().max(50).optional(),
   status: z.enum(['active', 'inactive']).default('active'),
-  brand: z.string().max(100).optional()
+  brand: z.string().max(100).optional(),
+  /** Precio con impuesto incluido para este artículo (opcional). */
+  priceIncludesTax: z.boolean().optional(),
+  /** Artículo exento de impuesto. */
+  taxExempt: z.boolean().optional()
 });
 
 const updateProductSchema = createProductSchema.partial();

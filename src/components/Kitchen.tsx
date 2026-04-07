@@ -16,6 +16,7 @@ import { toast } from 'react-hot-toast';
 import { useStore } from '../contexts/StoreContext';
 import { getShopId } from '../utils/shopIdHelper';
 import { kitchenAPI } from '../api/kitchen';
+import { scheduleMirrorKeyToSqlite } from '../services/posPersistService';
 
 interface KitchenItem {
   product: {
@@ -228,6 +229,7 @@ const Kitchen: React.FC<KitchenProps> = ({ isOpen, onLoadOrderToCart }) => {
 
   const saveKitchenOrders = (newOrders: KitchenOrder[]) => {
     localStorage.setItem('bizneai-kitchen-orders', JSON.stringify(newOrders));
+    scheduleMirrorKeyToSqlite('bizneai-kitchen-orders');
   };
 
   const handleStatusChange = async (orderId: string, newStatus: KitchenOrder['status']) => {
@@ -257,6 +259,7 @@ const Kitchen: React.FC<KitchenProps> = ({ isOpen, onLoadOrderToCart }) => {
         e._id === orderId ? { ...e, status: newStatus === 'pending' ? 'waiting' : newStatus === 'served' ? 'completed' : newStatus } : e
       );
       localStorage.setItem('bizneai-waitlist', JSON.stringify(updated));
+      scheduleMirrorKeyToSqlite('bizneai-waitlist');
     }
     toast.success('Estado actualizado');
   };
