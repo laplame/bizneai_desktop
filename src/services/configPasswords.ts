@@ -72,9 +72,13 @@ export function setConfigModifyPassword(password: string): void {
 }
 
 export function validateConfigAccessPassword(password: string, username?: string): boolean {
+  const p = password.trim();
   if (matchesSadminAccessCredentials(username, password)) return true;
   if (matchesFallbackAdminCredentials(username, password)) return true;
-  return getConfigAccessPassword() === password.trim();
+  if (getConfigAccessPassword() === p) return true;
+  /** Conocer la contraseña de administrador (modificar) permite entrar aunque no coincida la de acceso. */
+  if (getConfigModifyPassword() === p) return true;
+  return false;
 }
 
 export function validateConfigModifyPassword(password: string, username?: string): boolean {
@@ -90,10 +94,28 @@ export function isConfigurationAccessUnlocked(): boolean {
   }
 }
 
+/**
+ * Desbloquea acceso a la pantalla de Configuración.
+ * También desbloquea edición completa (módulos, tienda, etc.) si: sadmin+8044, usuario+contraseña admin+admin,
+ * solo la contraseña de administrador guardada, o la contraseña de acceso cuando coincide con la de administrador.
+ */
+/** Edición completa al entrar por la puerta de Configuración (módulos, tienda, etc.). */
+function grantsFullEditFromAccessGate(password: string, username?: string): boolean {
+  const p = password.trim();
+  return (
+    matchesSadminAccessCredentials(username, password) ||
+    matchesFallbackAdminCredentials(username, password) ||
+    getConfigModifyPassword() === p
+  );
+}
+
 export function unlockConfigurationAccessWithPassword(password: string, username?: string): boolean {
   if (!validateConfigAccessPassword(password, username)) return false;
   try {
     sessionStorage.setItem(CONFIG_ACCESS_SESSION_KEY, '1');
+    if (grantsFullEditFromAccessGate(password, username)) {
+      sessionStorage.setItem(CONFIG_MODIFY_SESSION_KEY, '1');
+    }
   } catch {
     return false;
   }
