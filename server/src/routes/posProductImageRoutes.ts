@@ -6,7 +6,7 @@ import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import net from 'net';
-import { ensureBizneaiDataDir } from '../dataPaths';
+import { ensureBizneaiDataDir } from '../dataPaths.js';
 
 const router = express.Router();
 

@@ -416,18 +416,29 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
             setKitchenEnabled(!!shopData.kitchenEnabled);
           }
 
-          // Persistir kitchenEnabled en bizneai-store-config para que el POS muestre el menú Cocina
+          // Persistir storeType + kitchenEnabled para que el POS resuelva Cocina según el tipo real (p. ej. papelería).
           try {
             const existingStoreConfig = localStorage.getItem('bizneai-store-config');
             const storeConfig = existingStoreConfig ? JSON.parse(existingStoreConfig) : {};
+            if (shopData.storeType != null && String(shopData.storeType).trim() !== '') {
+              const st = String(shopData.storeType).trim();
+              storeConfig.storeType = st;
+              localStorage.setItem('bizneai-store-type', st);
+              scheduleMirrorKeyToSqlite('bizneai-store-type');
+            }
             if (shopData.kitchenEnabled !== undefined) {
               storeConfig.kitchenEnabled = !!shopData.kitchenEnabled;
+            }
+            if (
+              (shopData.storeType != null && String(shopData.storeType).trim() !== '') ||
+              shopData.kitchenEnabled !== undefined
+            ) {
               localStorage.setItem('bizneai-store-config', JSON.stringify(storeConfig));
               scheduleMirrorKeyToSqlite('bizneai-store-config');
               window.dispatchEvent(new Event('store-config-updated'));
             }
           } catch (e) {
-            console.warn('Could not persist kitchenEnabled to store config:', e);
+            console.warn('Could not persist shop type/kitchen to store config:', e);
           }
 
           // Actualizar StoreContext con datos del servidor
@@ -459,6 +470,9 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
               };
               if (shopData.kitchenEnabled !== undefined) {
                 updated.kitchenEnabled = !!shopData.kitchenEnabled;
+              }
+              if (shopData.storeType != null && String(shopData.storeType).trim() !== '') {
+                updated.storeType = String(shopData.storeType).trim();
               }
               localStorage.setItem('bizneai-server-config', JSON.stringify(updated));
               scheduleMirrorKeyToSqlite('bizneai-server-config');

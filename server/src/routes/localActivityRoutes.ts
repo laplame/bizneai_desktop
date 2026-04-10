@@ -7,7 +7,7 @@ import {
   insertSaleCashierEvent,
   listSessionEvents,
   listSaleCashierEvents,
-} from '../localActivityDb';
+} from '../localActivityDb.js';
 
 const router = express.Router();
 

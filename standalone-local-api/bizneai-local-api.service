@@ -1,0 +1,16 @@
+[Unit]
+Description=BizneAI API local (SQLite + Express en puerto 3000)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/bizneai-local-api
+Environment=BIZNEAI_EMBEDDED=1
+Environment=BIZNEAI_USER_DATA=/opt/bizneai-local-api/data
+Environment=PORT=3000
+ExecStart=/usr/bin/node /opt/bizneai-local-api/start.cjs
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

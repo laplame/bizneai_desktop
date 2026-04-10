@@ -2,10 +2,10 @@
  * Persistencia SQLite tipo KV para espejar claves críticas de localStorage (acceso rápido en cliente).
  */
 import express from 'express';
-import { getPosKvDb, kvGet, kvSet } from '../posKvDb';
-import { getLocalActivityDb } from '../localActivityDb';
-import { ensureBizneaiDataDir, getBizneaiDataDir } from '../dataPaths';
-import { getDatabase } from '../../../src/database/database';
+import { getPosKvDb, kvGet, kvSet } from '../posKvDb.js';
+import { getLocalActivityDb } from '../localActivityDb.js';
+import { ensureBizneaiDataDir, getBizneaiDataDir } from '../dataPaths.js';
+import { getDatabase } from '../../../src/database/database.js';
 
 const router = express.Router();
 

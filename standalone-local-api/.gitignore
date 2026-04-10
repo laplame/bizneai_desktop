@@ -1,0 +1,4 @@
+node_modules/
+bizneai-server.cjs
+data/
+logs/

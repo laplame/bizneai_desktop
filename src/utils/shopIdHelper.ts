@@ -117,8 +117,8 @@ export const getShopDataFromMcp = async (): Promise<any | null> => {
 };
 
 /**
- * Sincroniza kitchenEnabled desde MCP a bizneai-store-config.
- * Llama al arranque cuando hay shopId configurado para que el menú Cocina se muestre.
+ * Sincroniza kitchenEnabled y storeType desde MCP a almacenamiento local.
+ * storeType evita mostrar Cocina con un tipo obsoleto en memoria (p. ej. papelería con kitchenEnabled true).
  */
 export const syncKitchenEnabledFromMcp = (): void => {
   const mcpUrl = getMcpUrl();
@@ -127,24 +127,52 @@ export const syncKitchenEnabledFromMcp = (): void => {
     if (!payload) return;
     const shop = payload.shop || payload.data?.shop || payload;
     const enabled = shop?.kitchenEnabled ?? payload.kitchen?.enabled;
-    if (enabled === undefined) return;
-    const kitchenOn = !!enabled;
+    const storeTypeRaw = shop?.storeType;
+    if (enabled === undefined && (storeTypeRaw == null || String(storeTypeRaw).trim() === '')) return;
     try {
       const existing = localStorage.getItem('bizneai-store-config');
       const config = existing ? JSON.parse(existing) : {};
-      config.kitchenEnabled = kitchenOn;
+      if (enabled !== undefined) {
+        config.kitchenEnabled = !!enabled;
+      }
+      if (storeTypeRaw != null && String(storeTypeRaw).trim() !== '') {
+        const st = String(storeTypeRaw).trim();
+        config.storeType = st;
+        localStorage.setItem('bizneai-store-type', st);
+        scheduleMirrorKeyToSqlite('bizneai-store-type');
+      }
       localStorage.setItem('bizneai-store-config', JSON.stringify(config));
       scheduleMirrorKeyToSqlite('bizneai-store-config');
+
+      const idsRaw = localStorage.getItem('bizneai-store-identifiers');
+      if (idsRaw && storeTypeRaw != null && String(storeTypeRaw).trim() !== '') {
+        try {
+          const ids = JSON.parse(idsRaw) as Record<string, unknown>;
+          ids.storeType = String(storeTypeRaw).trim();
+          if (shop?.storeName) ids.storeName = shop.storeName;
+          if (shop?._id) ids.shopId = shop._id;
+          localStorage.setItem('bizneai-store-identifiers', JSON.stringify(ids));
+          scheduleMirrorKeyToSqlite('bizneai-store-identifiers');
+        } catch {
+          /* ignore */
+        }
+      }
+
       const serverRaw = localStorage.getItem('bizneai-server-config');
       if (serverRaw) {
         const server = JSON.parse(serverRaw);
-        server.kitchenEnabled = kitchenOn;
+        if (enabled !== undefined) {
+          server.kitchenEnabled = !!enabled;
+        }
+        if (storeTypeRaw != null && String(storeTypeRaw).trim() !== '') {
+          server.storeType = String(storeTypeRaw).trim();
+        }
         localStorage.setItem('bizneai-server-config', JSON.stringify(server));
         scheduleMirrorKeyToSqlite('bizneai-server-config');
       }
       window.dispatchEvent(new Event('store-config-updated'));
     } catch (e) {
-      console.warn('Could not sync kitchenEnabled from MCP:', e);
+      console.warn('Could not sync shop flags from MCP:', e);
     }
   });
 };

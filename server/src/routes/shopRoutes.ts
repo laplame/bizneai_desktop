@@ -6,7 +6,7 @@ import {
   shopQuerySchema, 
   shopIdSchema,
   cryptoSettingsSchema 
-} from '../schemas/shopSchemas';
+} from '../schemas/shopSchemas.js';
 
 const router = express.Router();
 

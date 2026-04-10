@@ -1,7 +1,7 @@
 {
   "name": "bizneai",
   "private": true,
-  "version": "1.0.14",
+  "version": "1.0.15",
   "description": "Sistema de Punto de Venta Moderno con Tickets Virtuales",
   "author": {
     "name": "BizneAI Team",
@@ -22,7 +22,10 @@
     "dev:full": "concurrently \"npm run dev\" \"wait-on tcp:localhost:5173 tcp:localhost:3000 && electron .\"",
     "build": "tsc -b && vite build",
     "build:server": "node scripts/bundle-server.mjs",
-    "lint": "eslint .",
+    "pack:local-api": "npm run build:server && node scripts/pack-local-api-server.mjs",
+    "build:local-api-exe": "npm run pack:local-api && node scripts/build-local-api-exe.mjs",
+    "check:server-imports": "node scripts/check-server-esm-imports.mjs",
+    "lint": "npm run check:server-imports && eslint .",
     "preview": "vite preview",
     "electron": "electron .",
     "electron:dev": "concurrently \"npm run dev\" \"wait-on tcp:localhost:5173 tcp:localhost:3000 && electron .\"",
@@ -32,6 +35,7 @@
     "dist": "npm run bump-version && npm run build && npm run build:server && electron-builder",
     "dist:mac": "npm run bump-version && npm run fix-deps && npm run build && npm run build:server && electron-builder --mac",
     "dist:win": "npm run bump-version && npm run fix-deps && npm run build && npm run build:server && electron-builder --win",
+    "dist:win:all": "npm run dist:win && npm run build:local-api-exe",
     "dist:linux": "npm run bump-version && npm run fix-deps && npm run build && npm run build:server && electron-builder --linux",
     "pack": "npm run build && npm run build:server && electron-builder --dir",
     "pack:mac": "npm run bump-version && npm run build && npm run build:server && electron-builder --dir --mac",
@@ -83,6 +87,7 @@
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",
+    "@yao-pkg/pkg": "^6.14.2",
     "baseline-browser-mapping": "^2.10.0",
     "chai": "^4.5.0",
     "concurrently": "^8.2.2",
@@ -236,7 +241,11 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "BizneAI POS"
+      "shortcutName": "BizneAI POS",
+      "artifactName": "BizneAI-POS-Front-${version}-Setup.exe"
+    },
+    "portable": {
+      "artifactName": "BizneAI-POS-Front-${version}-Portable.exe"
     },
     "dmg": {
       "title": "BizneAI POS Installer",

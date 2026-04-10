@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import { ensureBizneaiDataDir } from './dataPaths';
+import { ensureBizneaiDataDir } from './dataPaths.js';
 import path from 'path';
 
 let db: Database.Database | null = null;

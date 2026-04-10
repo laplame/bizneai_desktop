@@ -9,6 +9,7 @@ export function isRestaurantOrCafeStoreType(storeType: string | null | undefined
   return (
     t === 'restaurant' ||
     t === 'coffee-shop' ||
+    t === 'coffee_shop' ||
     t === 'CoffeeShop' ||
     t === 'Restaurant'
   );
@@ -33,12 +34,11 @@ function readKitchenEnabledFlag(): boolean {
 }
 
 /**
- * Misma prioridad que AppContent: contexto > bizneai-store-config > bizneai-store-type > identificadores (respaldo).
+ * Prioridad: bizneai-store-config (último guardado / sync MCP) > contexto React > legacy > identificadores.
+ * Así una papelería (p. ej. StationeryStore) no queda con Cocina por un storeType antiguo en memoria aunque
+ * kitchenEnabled venga true en la nube.
  */
 function resolveStoreTypeForKitchen(storeTypeFromContext: string | null | undefined): string | null {
-  if (storeTypeFromContext && String(storeTypeFromContext).trim() !== '') {
-    return String(storeTypeFromContext).trim();
-  }
   try {
     const savedConfig = localStorage.getItem('bizneai-store-config');
     if (savedConfig) {
@@ -47,6 +47,9 @@ function resolveStoreTypeForKitchen(storeTypeFromContext: string | null | undefi
     }
   } catch {
     /* ignore */
+  }
+  if (storeTypeFromContext && String(storeTypeFromContext).trim() !== '') {
+    return String(storeTypeFromContext).trim();
   }
   const legacy = localStorage.getItem('bizneai-store-type');
   if (legacy && legacy.trim() !== '') return legacy.trim();
@@ -64,7 +67,7 @@ function resolveStoreTypeForKitchen(storeTypeFromContext: string | null | undefi
 
 /**
  * Indica si debe mostrarse el menú / flujo Cocina (sidebar, enviar a cocina, etc.).
- * @param storeTypeFromContext — `storeIdentifiers.storeType` del contexto cuando exista.
+ * @param storeTypeFromContext — `storeIdentifiers.storeType`; secundario frente a `bizneai-store-config`.
  */
 export function getKitchenModuleVisibility(storeTypeFromContext?: string | null): boolean {
   const storeType = resolveStoreTypeForKitchen(storeTypeFromContext);

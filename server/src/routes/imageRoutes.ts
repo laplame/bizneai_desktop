@@ -1,5 +1,5 @@
 import express from 'express';
-import uploadRoutes from './uploadRoutes';
+import uploadRoutes from './uploadRoutes.js';
 
 const router = express.Router();
 

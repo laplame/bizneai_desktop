@@ -1,6 +1,6 @@
 import path from 'path';
 import Database from 'better-sqlite3';
-import { ensureBizneaiDataDir } from './dataPaths';
+import { ensureBizneaiDataDir } from './dataPaths.js';
 
 const dataDir = ensureBizneaiDataDir();
 const dbPath = path.join(dataDir, 'local-activity.db');
@@ -70,7 +70,7 @@ function createActivityConsoleViews(database: Database.Database): void {
       created_at AS fecha
     FROM sale_cashier_events;
 
-    CREATE VIEW vista_clientes AS
+    CREATE VIEW IF NOT EXISTS vista_clientes AS
     SELECT
       id,
       shop_id AS tienda,
@@ -84,7 +84,7 @@ function createActivityConsoleViews(database: Database.Database): void {
     WHERE (name IS NOT NULL AND TRIM(name) != '')
        OR (email IS NOT NULL AND TRIM(email) != '');
 
-    CREATE VIEW vista_historial AS
+    CREATE VIEW IF NOT EXISTS vista_historial AS
     SELECT
       'sesion' AS categoria,
       id,

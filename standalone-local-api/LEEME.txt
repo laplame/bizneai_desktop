@@ -1,0 +1,79 @@
+BizneAI — API local (base de datos y SQLite)
+=============================================
+
+Qué es
+------
+Este programa es el servidor que escucha en http://127.0.0.1:3000 (por defecto).
+El POS de escritorio puede usarlo para persistencia /api/pos sin arrancar Electron.
+
+Cómo iniciar (Windows)
+----------------------
+1. Doble clic en: iniciar-api-local.bat
+2. Necesitas Node.js instalado, O bien una carpeta "node" aquí mismo con node.exe dentro
+   (descarga el ZIP "Windows Binary" desde https://nodejs.org y descomprime dentro de .\node\).
+
+O desde consola, en esta carpeta:
+   npm start
+
+Datos
+-----
+Por defecto SQLite y archivos quedan en la subcarpeta .\data\
+Puedes cambiar la ruta con variable de entorno BIZNEAI_USER_DATA.
+
+Puerto
+------
+Por defecto 3000. Cambiar con variable PORT, por ejemplo:
+   set PORT=3001
+   npm start
+
+Comprobar que funciona
+----------------------
+Abre en el navegador: http://127.0.0.1:3000/health
+
+Que el API esté siempre en marcha (puerto 3000)
+------------------------------------------------
+La base de datos SQLite es persistente en disco: al apagar el equipo los datos
+no se pierden. El servidor HTTP debe volver a arrancar al encender el PC.
+
+Windows (recomendado en tienda)
+  1) Copia portable con Node en .\node\node.exe (más fiable al arranque).
+  2) Doble clic: instalar-inicio-sesion-windows.bat
+     → Registra una tarea al iniciar sesión; si el API cae, se reinicia solo
+     (ejecutar-api-con-reintento.cmd).
+  3) Para que arranque al encender el equipo aun sin sesión: ejecutar como
+     administrador instalar-arranque-equipo-windows.bat
+     (exige node.exe portable en .\node\).
+  4) Quitar tareas: desinstalar-tarea-windows.bat
+
+Logs de reinicios: .\logs\api-reinicios.log
+
+Linux (systemd)
+  Copia el paquete a /opt/bizneai-local-api, ajusta rutas en
+  bizneai-local-api.service y:
+    sudo cp bizneai-local-api.service /etc/systemd/system/
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now bizneai-local-api.service
+
+macOS (LaunchAgent)
+  Ajusta rutas en com.bizneai.localapi.plist, crea la carpeta logs, luego:
+    sudo mkdir -p /usr/local/lib/bizneai-local-api/logs
+    sudo cp ... (ficheros del paquete)
+    cp com.bizneai.localapi.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.bizneai.localapi.plist
+
+POS Electron
+  Si el puerto 3000 ya está en uso por este API, el POS no lanza un segundo
+  servidor (reutiliza el que ya corre).
+
+Cómo generar esta carpeta desde el código fuente
+------------------------------------------------
+En la raíz del repositorio BizneAI desktop:
+   npm run pack:local-api
+
+Ejecutable único del API (Windows)
+----------------------------------
+En una máquina Windows (o en GitHub Actions «Build Windows»), desde la raíz del repo:
+   npm run build:local-api-exe
+Salida típica: release\BizneAI-Local-API-Backend.exe
+No requiere Node en el PC de la tienda: los datos van en .\data\ junto al .exe
+(salvo que definas BIZNEAI_USER_DATA). Mismo puerto y /health que arriba.

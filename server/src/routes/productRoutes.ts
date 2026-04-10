@@ -2,7 +2,7 @@ import express from 'express';
 import { z } from 'zod';
 import multer from 'multer';
 import path from 'path';
-import { ensureBizneaiDataDir } from '../dataPaths';
+import { ensureBizneaiDataDir } from '../dataPaths.js';
 
 const router = express.Router();
 
