@@ -38,6 +38,7 @@ import {
 } from '../services/merkleTreeService';
 import { syncUnsentBlocksToServer } from '../services/blockApiService';
 import { getTransactionsFromMcp, isShopIdConfigured } from '../utils/shopIdHelper';
+import { isBatchDue, syncMcpBatch, sleep } from '../utils/syncService';
 import {
   type SaleReportRow,
   mapMcpToSaleRow,
@@ -200,19 +201,45 @@ const SalesReports = ({ isOpen, onClose, onRecoverSaleToCart }: SalesReportsProp
   };
 
   useEffect(() => {
-    if (isOpen) {
-      if (isShopIdConfigured()) {
-        loadSalesFromServer();
-        syncUnsentBlocksToServer().then(({ sent }) => {
-          if (sent > 0) toast.success(`${sent} bloque(s) sincronizado(s) con el servidor`);
-        });
-      } else {
+    if (!isOpen) return;
+    let cancelled = false;
+
+    const run = async () => {
+      if (!isShopIdConfigured()) {
         const sampleSales = mergeWithLocalMerkle(generateSampleSales());
         setSales(sampleSales);
         setFilteredSales(sampleSales);
+        loadTransactionsAndBlocks();
+        return;
       }
+
+      try {
+        if (isBatchDue('sales')) {
+          await syncMcpBatch('sales', { force: true });
+          if (cancelled) return;
+          await sleep(600);
+        }
+        if (isBatchDue('tickets')) {
+          await syncMcpBatch('tickets', { force: true });
+          if (cancelled) return;
+          await sleep(400);
+        }
+      } catch (e) {
+        console.warn('[SalesReports] lotes MCP', e);
+      }
+
+      if (cancelled) return;
+      await loadSalesFromServer();
+      syncUnsentBlocksToServer().then(({ sent }) => {
+        if (sent > 0) toast.success(`${sent} bloque(s) sincronizado(s) con el servidor`);
+      });
       loadTransactionsAndBlocks();
-    }
+    };
+
+    void run();
+    return () => {
+      cancelled = true;
+    };
   }, [isOpen]);
 
   useEffect(() => {

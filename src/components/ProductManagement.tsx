@@ -24,7 +24,7 @@ import {
   mergeProductsFromServerPreserveImages,
 } from '../utils/shopIdHelper';
 import { syncProductImagesToLocalDisk } from '../services/productImageLocalCache';
-import { isSyncDue } from '../utils/syncService';
+import { isSyncDue, isBatchDue, syncMcpBatch } from '../utils/syncService';
 import { shouldShowImage, markImageFailed } from '../utils/imageCache';
 import InventoryManagement from './InventoryManagement';
 
@@ -283,7 +283,7 @@ const ProductManagement = ({ isOpen, onClose, initialView, restockProduct, onRes
       }
     }
 
-    // 2. Si hay servidor y sincronización pendiente (>24h), cargar en background. Si no, usar datos locales (standalone)
+    // 2. Si hay servidor y toca el lote de catálogo, cargar desde MCP. Si no, datos locales
     if (isShopIdConfigured() && isSyncDue()) {
       loadProductsFromServer();
     } else if (local.length === 0) {
@@ -291,6 +291,15 @@ const ProductManagement = ({ isOpen, onClose, initialView, restockProduct, onRes
       setProducts(sampleProducts);
       setFilteredProducts(sampleProducts);
     }
+  }, [isOpen]);
+
+  /** Respaldo paginado del catálogo MCP (lote aparte; intervalo ~24 h). */
+  useEffect(() => {
+    if (!isOpen || !isShopIdConfigured()) return;
+    if (!isBatchDue('catalogPages')) return;
+    void syncMcpBatch('catalogPages', { force: true }).catch((e) =>
+      console.warn('[ProductManagement] lote catalogPages', e)
+    );
   }, [isOpen]);
 
   useEffect(() => {

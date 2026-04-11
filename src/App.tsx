@@ -424,16 +424,10 @@ const hydrateProductsForPos = (productsList: unknown[]): Product[] => {
 
 const looksLikeSampleCatalog = (productsList: Product[]): boolean => {
   if (!productsList || productsList.length === 0) return false;
-  const sampleNames = new Set([
-    'Cappuccino',
-    'Café Americano',
-    'Café Latte',
-    'Muffin de Chocolate',
-    'Croissant'
-  ]);
-
+  const sampleNames = new Set(sampleProducts.map((p) => p.name));
   const matches = productsList.filter((p) => sampleNames.has(p.name)).length;
-  return matches >= 3;
+  const threshold = Math.min(3, sampleProducts.length);
+  return matches >= threshold;
 };
 
 const getConfiguredMcpUrl = (): string => {
@@ -449,7 +443,8 @@ const getConfiguredMcpUrl = (): string => {
 
 function App() {
   const { t } = useTranslation();
-  const [products, setProducts] = useState<Product[]>(sampleProducts);
+  /** Con tienda MCP configurada no mostrar muestra de cafetería (evita flash de productos ajenos al shop). */
+  const [products, setProducts] = useState<Product[]>(() => (isShopIdConfigured() ? [] : sampleProducts));
   const [cart, setCart] = useState<CartItem[]>([]);
   const [productOrderCounts, setProductOrderCounts] = useState<{ [productId: number]: number }>({});
   
@@ -575,32 +570,43 @@ function App() {
         const parsedProducts = JSON.parse(savedProducts);
         if (parsedProducts && parsedProducts.length > 0) {
           const hydratedLocalProducts = hydrateProductsForPos(parsedProducts);
-          setProducts(hydratedLocalProducts);
-          setCategories(extractCategories(hydratedLocalProducts));
+          if (isShopIdConfigured() && looksLikeSampleCatalog(hydratedLocalProducts)) {
+            localStorage.removeItem('bizneai-products');
+            window.dispatchEvent(new Event('products-updated'));
+            // No usar catálogo de demostración con shop configurado; seguir y pedir MCP abajo
+          } else {
+            setProducts(hydratedLocalProducts);
+            setCategories(extractCategories(hydratedLocalProducts));
 
-          const hasAnyImage = hydratedLocalProducts.some((product) => Boolean(product.image));
-          const isSampleCatalog = looksLikeSampleCatalog(hydratedLocalProducts);
-          if (hasAnyImage && !isSampleCatalog) {
-            if (isShopIdConfigured() && hydratedLocalProducts.some((p) => !p?.image || String(p.image).trim() === '')) {
-              enrichProductsWithImages(hydratedLocalProducts).then((enriched) => {
-                setProducts(enriched);
-                setCategories(extractCategories(enriched));
-                localStorage.setItem('bizneai-products', JSON.stringify(enriched));
-                window.dispatchEvent(new Event('products-updated'));
-              });
+            const hasAnyImage = hydratedLocalProducts.some((product) => Boolean(product.image));
+            const isSampleCatalog = looksLikeSampleCatalog(hydratedLocalProducts);
+            if (hasAnyImage && !isSampleCatalog) {
+              if (isShopIdConfigured() && hydratedLocalProducts.some((p) => !p?.image || String(p.image).trim() === '')) {
+                enrichProductsWithImages(hydratedLocalProducts).then((enriched) => {
+                  setProducts(enriched);
+                  setCategories(extractCategories(enriched));
+                  localStorage.setItem('bizneai-products', JSON.stringify(enriched));
+                  window.dispatchEvent(new Event('products-updated'));
+                });
+              }
             }
+            maybeSyncIfDue();
+            return;
           }
-          maybeSyncIfDue();
-          return;
         }
       } catch (error) {
         console.warn('Error parsing saved products:', error);
       }
     }
 
-    // 3. Sin datos locales: usar productos de ejemplo (incluyen Café Latte con variantes)
-    setProducts(sampleProducts);
-    setCategories(extractCategories(sampleProducts));
+    // 3. Sin datos locales (o se descartó muestra): con shop solo MCP / vacío; sin shop, muestra de ejemplo
+    if (isShopIdConfigured()) {
+      setProducts([]);
+      setCategories(['Todos']);
+    } else {
+      setProducts(sampleProducts);
+      setCategories(extractCategories(sampleProducts));
+    }
     if (isShopIdConfigured()) {
       try {
         syncKitchenEnabledFromMcp();

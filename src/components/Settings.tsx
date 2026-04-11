@@ -64,7 +64,15 @@ import { StoreConfig } from '../types/store';
 import { useStore } from '../contexts/StoreContext';
 import { getStoreTypes, checkStoreTypesForUpdates, getStoreTypeLabel } from '../data/storeTypes';
 import { mapMcpProductToLocal, mergeProductsFromServerPreserveImages } from '../utils/shopIdHelper';
-import { setLastSyncTime, isSyncDue } from '../utils/syncService';
+import { extractMcpMethodsField, getMcpMethodsEndpointCount } from '../utils/mcpMethodsApi';
+import {
+  setLastSyncTime,
+  isSyncDue,
+  getLastFullBackupTime,
+  getFullBackupIntervalHours,
+  setFullBackupIntervalHours,
+} from '../utils/syncService';
+import { runFullBackupSync } from '../services/fullBackupSyncService';
 import { getWhatsAppUrl } from '../constants/contact';
 import {
   getReceiptPrintConfig,
@@ -197,12 +205,17 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
     lastSync: null
   });
 
-  // Server URL and MCP Configuration
-  const [serverConfig, setServerConfig] = useState({
+  // Server URL and MCP Configuration (mcpMethods: array legacy o mapa GET/POST/… desde /methods)
+  const [serverConfig, setServerConfig] = useState<{
+    serverUrl: string;
+    shopId: string;
+    mcpUrl: string;
+    mcpMethods: unknown;
+  }>({
     serverUrl: '',
     shopId: '',
     mcpUrl: '',
-    mcpMethods: [] as string[]
+    mcpMethods: [],
   });
 
   // UI State
@@ -216,6 +229,8 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
     connected: boolean;
     responseTime: number | null;
   }>({ connected: false, responseTime: null });
+  const [fullBackupIntervalH, setFullBackupIntervalH] = useState(() => getFullBackupIntervalHours());
+  const [fullBackupUiTick, setFullBackupUiTick] = useState(0);
   const [showContactDeveloperModal, setShowContactDeveloperModal] = useState(false);
 
   const [modifyUnlocked, setModifyUnlocked] = useState(() =>
@@ -521,18 +536,18 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
   const handleServerUrlChange = async (url: string) => {
     const shopId = extractShopIdFromUrl(url);
     let mcpUrl = '';
-    let mcpMethods: string[] = [];
+    let mcpMethods: unknown = [];
 
     if (shopId) {
       mcpUrl = buildMcpUrl(shopId);
       
-      // Try to fetch MCP methods
+      // GET …/methods — data.methods puede ser { GET: [], POST: [], … }
       try {
         const methodsUrl = `${mcpUrl}/methods`;
         const response = await fetch(methodsUrl);
         if (response.ok) {
           const data = await response.json();
-          mcpMethods = data.methods || data.data?.methods || [];
+          mcpMethods = extractMcpMethodsField(data);
         }
       } catch (error) {
         console.warn('Could not fetch MCP methods:', error);
@@ -542,7 +557,7 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
         serverUrl: url,
         shopId,
         mcpUrl,
-        mcpMethods
+        mcpMethods,
       };
 
       saveServerConfig(newConfig);
@@ -557,8 +572,10 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
       // Cargar datos del shop desde el servidor
       const dataLoaded = await loadShopDataFromServer(mcpUrl);
       
-      if (mcpMethods.length > 0) {
-        toast.success(`Shop ID extraído: ${shopId}. ${mcpMethods.length} métodos MCP disponibles${dataLoaded ? '. Datos cargados.' : ''}`);
+      if (getMcpMethodsEndpointCount(mcpMethods) > 0) {
+        toast.success(
+          `Shop ID extraído: ${shopId}. ${getMcpMethodsEndpointCount(mcpMethods)} endpoints MCP documentados${dataLoaded ? '. Datos cargados.' : ''}`
+        );
       } else {
         toast.success(`Shop ID extraído: ${shopId}${dataLoaded ? '. Datos cargados.' : ''}`);
       }
@@ -588,21 +605,52 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
       
       if (response.ok) {
         const data = await response.json();
-        const methods = data.methods || data.data?.methods || [];
-        
+        const methods = extractMcpMethodsField(data);
+
         const updatedConfig = {
           ...serverConfig,
-          mcpMethods: methods
+          mcpMethods: methods,
         };
         saveServerConfig(updatedConfig);
-        
-        toast.success(`${methods.length} métodos MCP cargados exitosamente`);
+
+        const n = getMcpMethodsEndpointCount(methods);
+        toast.success(`${n} endpoints MCP documentados cargados`);
       } else {
         toast.error('Error al obtener métodos MCP');
       }
     } catch (error) {
       console.error('Error fetching MCP methods:', error);
       toast.error('Error al conectar con el servidor MCP');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleFullBackupNow = async () => {
+    if (!serverConfig.shopId || !serverConfig.mcpUrl) {
+      toast.error('Configura la URL del servidor y el Shop ID primero');
+      return;
+    }
+    setIsLoading(true);
+    toast.loading('Sincronización completa MCP (backup en línea)...', { id: 'full-backup' });
+    try {
+      const result = await runFullBackupSync((label) => {
+        toast.loading(`${label}...`, { id: 'full-backup' });
+      });
+      toast.dismiss('full-backup');
+      if (result.ok) {
+        toast.success(
+          `Backup completo: ${result.productCount ?? 0} productos en catálogo; ventas/tickets/inventario guardados en local.`
+        );
+      } else {
+        toast.error(
+          'Backup parcial: revisa que el API local (:3000) esté en marcha en desarrollo o tu conexión a internet.'
+        );
+      }
+      setFullBackupUiTick((t) => t + 1);
+    } catch (e) {
+      toast.dismiss('full-backup');
+      toast.error(e instanceof Error ? e.message : 'Error en sincronización completa');
     } finally {
       setIsLoading(false);
     }
@@ -1296,10 +1344,10 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
                 </button>
               </div>
             )}
-            {serverConfig.mcpMethods.length > 0 && (
+            {getMcpMethodsEndpointCount(serverConfig.mcpMethods) > 0 && (
               <div className="info-row">
-                <span className="info-label">Métodos MCP disponibles:</span>
-                <span className="info-value">{serverConfig.mcpMethods.length}</span>
+                <span className="info-label">Endpoints MCP documentados:</span>
+                <span className="info-value">{getMcpMethodsEndpointCount(serverConfig.mcpMethods)}</span>
               </div>
             )}
             <button 
@@ -1310,6 +1358,45 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
             >
               <RefreshCw size={16} />
               Actualizar Métodos MCP
+            </button>
+            <div className="info-row" style={{ marginTop: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+              <span className="info-label">Último backup completo:</span>
+              <span className="info-value" key={fullBackupUiTick}>
+                {getLastFullBackupTime()?.toLocaleString() ?? '—'}
+              </span>
+            </div>
+            <div className="info-row" style={{ alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+              <span className="info-label">Intervalo automático (12–24 h):</span>
+              <input
+                type="number"
+                min={12}
+                max={24}
+                step={1}
+                value={fullBackupIntervalH}
+                onChange={(e) => {
+                  const v = parseInt(e.target.value, 10);
+                  if (Number.isFinite(v)) {
+                    setFullBackupIntervalHours(v);
+                    setFullBackupIntervalH(getFullBackupIntervalHours());
+                  }
+                }}
+                className="url-input"
+                style={{ width: '4rem', padding: '0.35rem' }}
+                disabled={isLoading}
+              />
+              <span style={{ fontSize: '0.8rem', color: 'var(--bs-dark-text-muted)' }}>
+                El POS descarga ventas, pedidos, productos, inventario y un snapshot de clientes locales.
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={handleFullBackupNow}
+              disabled={isLoading || !serverConfig.mcpUrl}
+              className="btn-secondary"
+              style={{ marginTop: '0.5rem' }}
+            >
+              <Download size={16} />
+              Sincronización completa ahora (backup en línea)
             </button>
           </div>
         )}

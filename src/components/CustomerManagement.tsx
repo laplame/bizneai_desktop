@@ -28,6 +28,8 @@ import {
   FileText
 } from 'lucide-react';
 import type { RegistryCustomer as Customer } from '../types/customerRegistry';
+import { isShopIdConfigured } from '../utils/shopIdHelper';
+import { isBatchDue, syncMcpBatch } from '../utils/syncService';
 import {
   loadCustomers,
   saveCustomers,
@@ -100,6 +102,9 @@ const CustomerManagement = ({ isOpen, onClose }: CustomerManagementProps) => {
       setCustomers(loaded);
       setPurchases(samplePurchases);
       setFilteredCustomers(loaded);
+      if (isShopIdConfigured() && isBatchDue('localCustomers')) {
+        void syncMcpBatch('localCustomers', { force: true });
+      }
     }
   }, [isOpen]);
 

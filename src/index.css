@@ -1153,7 +1153,7 @@ html, body {
   background: #ffffff;
   border: 1px solid #e5e7eb;
   border-radius: 12px;
-  padding: 0.75rem 0.5rem;
+  padding: 0.5rem 0.5rem 0.45rem;
   cursor: pointer;
   transition: all 0.15s ease;
   display: flex;
@@ -1163,8 +1163,9 @@ html, body {
   position: relative;
   z-index: 2;
   box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
-  min-height: 165px;
-  justify-content: space-between;
+  min-height: 0;
+  justify-content: flex-start;
+  gap: 0.35rem;
   overflow: hidden;
   box-sizing: border-box;
   width: 100%;
@@ -1203,7 +1204,7 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-bottom: 0.5rem;
+  margin-bottom: 0;
   font-size: 1.5rem;
   color: #6b7280;
   flex-shrink: 0;
@@ -1212,19 +1213,19 @@ html, body {
   box-sizing: border-box;
 }
 
-/* Tarjetas con imagen: área de imagen más grande para toque rápido */
+/* Tarjetas con imagen: altura fija solo en la zona de imagen (sin estirar la tarjeta) */
 .product-grid .product-card--has-image {
-  min-height: 200px;
+  min-height: 0;
 }
 
 .product-grid .product-card--has-image .product-image {
   width: 100% !important;
   min-width: 100% !important;
   max-width: 100% !important;
-  height: 110px !important;
-  min-height: 110px !important;
-  max-height: 110px !important;
-  margin-bottom: 0.5rem;
+  height: 104px !important;
+  min-height: 104px !important;
+  max-height: 104px !important;
+  margin-bottom: 0;
   flex-shrink: 0;
 }
 
@@ -1299,9 +1300,10 @@ html, body {
   font-size: 0.9rem !important;
   font-family: inherit !important;
   margin: 0 !important;
-  margin-bottom: 0.25rem !important;
+  margin-top: 0.1rem !important;
+  margin-bottom: 0 !important;
   color: #111827 !important;
-  line-height: 1.2 !important;
+  line-height: 1.25 !important;
   letter-spacing: normal !important;
   word-wrap: break-word !important;
   word-break: break-word !important;
@@ -1309,13 +1311,13 @@ html, body {
   width: 100% !important;
   text-align: center !important;
   text-transform: none !important;
-  min-height: 2.5rem !important;
-  max-height: 3.5rem !important;
+  min-height: 0 !important;
+  max-height: 2.75rem !important;
   overflow: hidden !important;
   display: -webkit-box !important;
   -webkit-line-clamp: 2 !important;
   -webkit-box-orient: vertical !important;
-  padding: 0 0.5rem !important;
+  padding: 0 0.35rem !important;
   box-sizing: border-box !important;
   text-overflow: ellipsis !important;
   flex-shrink: 0 !important;
@@ -1345,9 +1347,10 @@ html, body {
   font-size: 0.9rem !important;
   font-family: inherit !important;
   margin: 0 !important;
-  margin-bottom: 0.75rem !important;
+  margin-top: 0.1rem !important;
+  margin-bottom: 0 !important;
   color: #111827 !important;
-  line-height: 1.4 !important;
+  line-height: 1.25 !important;
   letter-spacing: normal !important;
   word-wrap: break-word !important;
   word-break: break-word !important;
@@ -1355,13 +1358,13 @@ html, body {
   width: 100% !important;
   text-align: center !important;
   text-transform: none !important;
-  min-height: 2.5rem !important;
-  max-height: 3.5rem !important;
+  min-height: 0 !important;
+  max-height: 2.75rem !important;
   overflow: hidden !important;
   display: -webkit-box !important;
   -webkit-line-clamp: 2 !important;
   -webkit-box-orient: vertical !important;
-  padding: 0 0.25rem !important;
+  padding: 0 0.35rem !important;
   box-sizing: border-box !important;
   text-overflow: ellipsis !important;
 }

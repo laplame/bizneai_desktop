@@ -1,38 +1,44 @@
 /**
- * Servicio de sincronización para modo standalone/offline.
- * Sincroniza una vez al día cuando hay conexión. Si no hay conexión,
- * el sistema funciona con los datos descargados la primera vez.
+ * Sincronización programada ligera: solo lotes `shop` + `catalog` cuando toca el intervalo del catálogo.
+ * Backup completo por lotes: `runMcpFullBackupBatched` / Configuración.
  */
 
-import { getProductsFromMcp, getShopId, getMcpUrl, mapMcpProductToLocal, mergeProductsFromServerPreserveImages } from './shopIdHelper';
-import { syncProductImagesToLocalDisk } from '../services/productImageLocalCache';
+import { getShopId, getMcpUrl } from './shopIdHelper';
+import { setLastSyncTime } from './syncClock';
+import { pullProductsFromMcpToLocalStorage } from './mcpProductSync';
+import {
+  isBatchDue,
+  syncMcpBatch,
+  sleep,
+  DEFAULT_INTER_BATCH_GAP_MS,
+  runFullBackupSync,
+  runMcpFullBackupBatched,
+} from '../services/mcpBatchSync';
 
-const LAST_SYNC_KEY = 'bizneai-last-sync';
-const SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 horas
+export { getLastSyncTime, setLastSyncTime, LAST_SYNC_KEY } from './syncClock';
+export {
+  getLastFullBackupTime,
+  setLastFullBackupTime,
+  getFullBackupIntervalHours,
+  setFullBackupIntervalHours,
+  getFullBackupIntervalMs,
+  isFullBackupDue,
+} from './syncClock';
 
-export const getLastSyncTime = (): Date | null => {
-  try {
-    const stored = localStorage.getItem(LAST_SYNC_KEY);
-    if (!stored) return null;
-    const ts = parseInt(stored, 10);
-    return isNaN(ts) ? null : new Date(ts);
-  } catch {
-    return null;
-  }
-};
+export {
+  isBatchDue,
+  syncMcpBatch,
+  runMcpFullBackupBatched,
+  runFullBackupSync,
+  sleep,
+  MCP_BATCH_INTERVAL_MS,
+  DEFAULT_INTER_BATCH_GAP_MS,
+  DEFAULT_INTER_PAGE_DELAY_MS,
+} from '../services/mcpBatchSync';
 
-export const setLastSyncTime = (date: Date = new Date()) => {
-  localStorage.setItem(LAST_SYNC_KEY, String(date.getTime()));
-};
+/** ¿Toca refrescar catálogo desde MCP? (intervalo del lote `catalog`, típ. 12 h). */
+export const isSyncDue = (): boolean => isBatchDue('catalog');
 
-/** Verifica si ya pasaron 24h desde la última sincronización */
-export const isSyncDue = (): boolean => {
-  const last = getLastSyncTime();
-  if (!last) return true;
-  return Date.now() - last.getTime() >= SYNC_INTERVAL_MS;
-};
-
-/** Verifica si hay datos locales (ya se sincronizó al menos una vez) */
 export const hasLocalData = (): boolean => {
   const products = localStorage.getItem('bizneai-products');
   if (!products) return false;
@@ -44,31 +50,16 @@ export const hasLocalData = (): boolean => {
   }
 };
 
-/** Ejecuta sincronización en segundo plano. No bloquea. Usa getProductsFromMcp para imágenes enriquecidas. */
+/** Solo catálogo (sin otros lotes). */
 export const runBackgroundSync = async (onSuccess?: (productCount: number) => void): Promise<boolean> => {
   if (!getShopId() || !getMcpUrl()) return false;
 
   try {
-    const mcpProducts = await getProductsFromMcp();
-    if (!mcpProducts || mcpProducts.length === 0) return false;
-
-    let savedParsed: unknown[] = [];
-    try {
-      const raw = localStorage.getItem('bizneai-products');
-      if (raw) {
-        const p = JSON.parse(raw);
-        if (Array.isArray(p)) savedParsed = p;
-      }
-    } catch {
-      /* ignore */
-    }
-    const mappedProducts = mcpProducts.map((p: any, index: number) => mapMcpProductToLocal(p, index));
-    const merged = mergeProductsFromServerPreserveImages(savedParsed, mappedProducts);
-    const withLocalImages = await syncProductImagesToLocalDisk(merged);
-    localStorage.setItem('bizneai-products', JSON.stringify(withLocalImages));
+    const n = await pullProductsFromMcpToLocalStorage();
+    if (n === 0) return false;
     setLastSyncTime();
     window.dispatchEvent(new Event('products-updated'));
-    onSuccess?.(withLocalImages.length);
+    onSuccess?.(n);
     return true;
   } catch (error) {
     console.warn('Background sync failed (offline?):', error);
@@ -76,12 +67,21 @@ export const runBackgroundSync = async (onSuccess?: (productCount: number) => vo
   }
 };
 
-/** Inicia sincronización si está programada. Ejecutar al arranque sin bloquear. */
+/**
+ * Si el lote de catálogo está vencido, descarga agregado de tienda + catálogo (con pausa entre ambos).
+ */
 export const maybeSyncIfDue = (onSuccess?: (productCount: number) => void): void => {
-  if (!isSyncDue()) return;
-  if (!getShopId()) return;
+  if (!getShopId() || !getMcpUrl()) return;
+  if (!isBatchDue('catalog')) return;
 
-  runBackgroundSync(onSuccess).then((ok) => {
-    if (ok) console.log('BizneAI: sync completada');
-  });
+  void (async () => {
+    try {
+      await syncMcpBatch('shop', { force: true });
+      await sleep(DEFAULT_INTER_BATCH_GAP_MS);
+      const r = await syncMcpBatch('catalog', { force: true });
+      if (r.ok && r.count != null) onSuccess?.(r.count);
+    } catch (e) {
+      console.warn('[BizneAI] Sincronización programada (lotes shop+catálogo)', e);
+    }
+  })();
 };

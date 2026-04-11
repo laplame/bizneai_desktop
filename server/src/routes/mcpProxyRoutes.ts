@@ -131,6 +131,50 @@ router.get('/mcp/:shopId/methods', async (req, res) => {
   }
 });
 
+/** Subrutas GET de MCP (backup / informes). Query string se reenvía tal cual. */
+const MCP_GET_SUBPATHS = [
+  'analytics',
+  'blocks/summary',
+  'cash-register/sessions',
+  'cash-register/status',
+  'inventory/history',
+  'inventory/low-stock',
+  'inventory/status',
+  'products',
+  'purchase-orders',
+  'sales/stats',
+  'sales',
+  'tickets/stats',
+  'tickets',
+] as const;
+
+function registerMcpGetProxy(subpath: string) {
+  router.get(`/mcp/:shopId/${subpath}`, async (req, res) => {
+    const { shopId } = req.params;
+    const qs = new URLSearchParams(req.query as Record<string, string>).toString();
+    const targetUrl = `${BIZNEAI_ORIGIN}/api/mcp/${shopId}/${subpath}${qs ? `?${qs}` : ''}`;
+    try {
+      const response = await axios.get(targetUrl, {
+        headers: { Accept: 'application/json' },
+        timeout: 120000,
+        validateStatus: () => true,
+      });
+      res.status(response.status).json(response.data);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Proxy error';
+      console.error('[MCP GET Proxy]', subpath, message);
+      res.status(502).json({
+        success: false,
+        error: message,
+      });
+    }
+  });
+}
+
+for (const sub of MCP_GET_SUBPATHS) {
+  registerMcpGetProxy(sub);
+}
+
 /** POST /api/proxy/discount-qr/verify - Proxy para verificar código QR de descuento */
 router.post('/discount-qr/verify', async (req, res) => {
   const targetUrl = `${BIZNEAI_ORIGIN}/api/discount-qr/verify`;
