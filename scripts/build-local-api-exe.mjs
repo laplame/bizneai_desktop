@@ -23,6 +23,27 @@ if (process.platform !== 'win32') {
   process.exit(1);
 }
 
+/** Debe coincidir con `PKG_TARGET` / `standalone-local-api/package.json` pkg.targets (node20 → ABI 115). */
+const PKG_NODE_MODULE_VERSION = '115';
+
+if (process.versions.modules !== PKG_NODE_MODULE_VERSION) {
+  console.error(
+    '[build:local-api-exe] El .exe usa Node 20 embebido (NODE_MODULE_VERSION=' +
+      PKG_NODE_MODULE_VERSION +
+      ').\n' +
+      `Tu Node actual es ${process.version} (NODE_MODULE_VERSION=${process.versions.modules}). ` +
+      'better-sqlite3 se instaló para otra versión → fallará al abrir SQLite.\n\n' +
+      'Solución:\n' +
+      '  1) Instala Node 20 LTS desde https://nodejs.org (o nvm-windows: nvm install 20 && nvm use 20).\n' +
+      '  2) Borra módulos nativos viejos y la caché de pkg, luego reempaqueta:\n' +
+      '     rmdir /s /q standalone-local-api\\node_modules\n' +
+      '     rmdir /s /q %USERPROFILE%\\.cache\\pkg\n' +
+      '     npm run pack:local-api\n' +
+      '     npm run build:local-api-exe\n'
+  );
+  process.exit(1);
+}
+
 if (!fs.existsSync(pkgStart)) {
   console.error('[build:local-api-exe] Falta standalone-local-api/pkg-start.cjs');
   process.exit(1);

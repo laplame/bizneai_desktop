@@ -3,6 +3,9 @@
   "private": true,
   "version": "1.0.14",
   "description": "API local BizneAI (Express + SQLite) para ejecutar aparte del POS",
+  "engines": {
+    "node": ">=20 <21"
+  },
   "main": "start.cjs",
   "bin": "start.cjs",
   "scripts": {

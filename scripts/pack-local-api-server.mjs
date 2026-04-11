@@ -38,6 +38,15 @@ if (install.status !== 0) {
   process.exit(install.status ?? 1);
 }
 
+/** pkg embebe Node 20 (ABI 115); better-sqlite3 nativo debe coincidir. */
+if (process.platform === 'win32' && process.versions.modules !== '115') {
+  console.warn(
+    '\n[pack:local-api] Aviso: para generar BizneAI-Local-API-Backend.exe hace falta Node 20 LTS ' +
+      `(ahora: ${process.version}, NODE_MODULE_VERSION=${process.versions.modules}). ` +
+      'Con Node 22+ el .exe fallará al abrir SQLite; usa Node 20 y vuelve a `npm run pack:local-api` antes de `build:local-api-exe`.\n'
+  );
+}
+
 function copyRecursive(src, dest, opts = { skipTopLevelData: false }) {
   const stat = fs.statSync(src);
   if (stat.isDirectory()) {
