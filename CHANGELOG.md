@@ -7,6 +7,13 @@ y el proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
 ---
 
+## [1.0.19] - 2026-04-13
+
+### Modificado
+- **Impresión de tickets (Electron)**: impresora por defecto de Windows resuelta en el proceso principal cuando no hay nombre en ajustes (mejora impresión silenciosa con `electron-pos-printer`). Tras la venta, si «Impresión automática» está desactivada ya no se abre el cuadro del sistema; la impresión manual desde ticket virtual o reportes de ventas sigue pudiendo abrir el cuadro (`forceInteractive`).
+
+---
+
 ## [1.0.3] - 2026-03-03
 
 ### Añadido

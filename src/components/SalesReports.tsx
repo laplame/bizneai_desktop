@@ -416,22 +416,25 @@ const SalesReports = ({ isOpen, onClose, onRecoverSaleToCart }: SalesReportsProp
       const tax = sale.tax ?? taxAmount;
       const total = sale.total ?? computedTotal;
 
-      const r = await printReceiptThermalOrDialog({
-        storeName: resolveStoreNameForPrint(),
-        saleId: String(sale.id),
-        ticketKind: 'sale',
-        date: new Date(sale.date).toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' }),
-        items: sale.items.map((i) => ({
-          productName: i.product.name,
-          quantity: i.quantity,
-          unitPrice: i.product.price,
-          totalPrice: i.product.price * i.quantity,
-        })),
-        subtotal,
-        tax,
-        total,
-        paymentMethod: sale.paymentMethod,
-      });
+      const r = await printReceiptThermalOrDialog(
+        {
+          storeName: resolveStoreNameForPrint(),
+          saleId: String(sale.id),
+          ticketKind: 'sale',
+          date: new Date(sale.date).toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' }),
+          items: sale.items.map((i) => ({
+            productName: i.product.name,
+            quantity: i.quantity,
+            unitPrice: i.product.price,
+            totalPrice: i.product.price * i.quantity,
+          })),
+          subtotal,
+          tax,
+          total,
+          paymentMethod: sale.paymentMethod,
+        },
+        { forceInteractive: true }
+      );
       if (r.success) {
         toast.success('Ticket enviado o abierto el cuadro de impresión');
       } else {

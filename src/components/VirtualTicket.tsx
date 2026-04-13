@@ -113,7 +113,8 @@ const VirtualTicket = ({
       taxSettings
     );
 
-    const result = await printReceiptThermalOrDialog({
+    const result = await printReceiptThermalOrDialog(
+      {
       storeName: resolveStoreNameForPrint(),
       saleId,
       date: new Date().toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' }),
@@ -133,7 +134,9 @@ const VirtualTicket = ({
       total: finalTotal,
       paymentMethod,
       ticketKind: 'sale',
-    });
+      },
+      { forceInteractive: true }
+    );
 
     if (result.success) {
       toast.success(

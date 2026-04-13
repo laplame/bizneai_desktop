@@ -487,4 +487,4 @@ MIT — ver [LICENSE](LICENSE).
 
 ---
 
-BizneAI Team — versión **1.0.18** (abril 2026)
+BizneAI Team — versión **1.0.19** (abril 2026)

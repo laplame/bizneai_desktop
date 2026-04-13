@@ -9,6 +9,9 @@ import { spawn } from 'child_process';
 const require = createRequire(import.meta.url);
 const { PosPrinter } = require('electron-pos-printer');
 
+/** Ventana principal del POS (para resolver impresora por defecto en Windows). */
+let posMainWindow = null;
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -292,6 +295,7 @@ function createWindow() {
     }
   });
 
+  posMainWindow = mainWindow;
   return mainWindow;
 }
 
@@ -336,11 +340,33 @@ function buildReceiptPrintData({ storeName, saleId, date, items, subtotal, tax, 
     { type: 'text', value: `Subtotal:  $${Number(subtotal || 0).toFixed(2)}`, style: { fontSize: '11px' } },
     { type: 'text', value: `IVA:       $${Number(tax || 0).toFixed(2)}`, style: { fontSize: '11px' } },
     { type: 'text', value: `TOTAL:     $${Number(total || 0).toFixed(2)}`, style: { fontWeight: '700', fontSize: '14px' } },
-    { type: 'text', value: `Pago: ${paymentMethod || 'Efectivo'}`, style: { fontSize: '10px', color: '#666' } },
+    {
+      type: 'text',
+      value: `Pago: ${typeof paymentMethod === 'string' ? paymentMethod : paymentMethod != null ? String(paymentMethod) : 'Efectivo'}`,
+      style: { fontSize: '10px', color: '#666' },
+    },
     { type: 'text', value: '------------------------', style: { textAlign: 'center', fontSize: '11px' } },
     { type: 'text', value: '¡Gracias por su compra!', style: { textAlign: 'center', fontSize: '11px', fontStyle: 'italic' } },
   );
   return lines;
+}
+
+/**
+ * Nombre de impresora para PosPrinter: el configurado o la predeterminada del sistema.
+ * En Windows, `webContents.print({ silent: true })` suele fallar sin `deviceName` explícito.
+ */
+async function resolveThermalPrinterName(preferred) {
+  const p = preferred && String(preferred).trim();
+  if (p) return p;
+  if (!posMainWindow || posMainWindow.isDestroyed()) return undefined;
+  try {
+    const list = await posMainWindow.webContents.getPrintersAsync();
+    const def = list.find((x) => x.isDefault);
+    return def?.name || list[0]?.name;
+  } catch (e) {
+    console.warn('[Print] No se pudo listar impresoras:', e?.message || e);
+    return undefined;
+  }
 }
 
 function probeBackendHealthOnce() {
@@ -493,13 +519,15 @@ app.whenReady().then(async () => {
   ipcMain.handle('print-receipt', async (_event, { receiptData, pageSize = '80mm', printerName }) => {
     try {
       const printData = buildReceiptPrintData(receiptData, pageSize);
+      const resolvedName = await resolveThermalPrinterName(printerName);
       const options = {
         preview: false,
         silent: true,
         copies: 1,
         pageSize,
         timeOutPerLine: 400,
-        ...(printerName && { printerName }),
+        margin: '0 0 0 0',
+        ...(resolvedName && { printerName: resolvedName }),
       };
       await PosPrinter.print(printData, options);
       return { success: true };

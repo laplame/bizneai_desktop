@@ -420,13 +420,21 @@ export function openReceiptPrintPreviewForData(data: ReceiptPrintData): { succes
 }
 
 /**
- * Misma ruta que al completar venta (PosPrinter silencioso). Si falla o no hay térmica configurada,
- * abre el mismo ticket en ventana con cuadro de impresión (PDF / elegir impresora).
+ * Tras una venta: PosPrinter silencioso en Electron si «Impresión automática» está activa.
+ * Si la térmica falla, abre el ticket con cuadro del sistema (PDF / elegir impresora).
+ * Si la impresión automática está desactivada, no imprime ni abre diálogo (salvo `forceInteractive`).
  */
 export async function printReceiptThermalOrDialog(
-  data: ReceiptPrintData
+  data: ReceiptPrintData,
+  opts?: { forceInteractive?: boolean }
 ): Promise<{ success: boolean; error?: string }> {
   const config = getReceiptPrintConfig();
+  const userExplicit = opts?.forceInteractive === true;
+
+  if (!config.enabled && !userExplicit) {
+    return { success: true };
+  }
+
   if (isElectron() && config.enabled) {
     const r = await printReceipt(data);
     if (r.success) return r;
@@ -437,6 +445,11 @@ export async function printReceiptThermalOrDialog(
     }
     return { success: true };
   }
+
+  if (isElectron() && userExplicit && !config.enabled) {
+    return openReceiptPrintPreviewForData(data);
+  }
+
   return openReceiptPrintPreviewForData(data);
 }
 

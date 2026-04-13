@@ -1,7 +1,7 @@
 {
   "name": "bizneai",
   "private": true,
-  "version": "1.0.18",
+  "version": "1.0.19",
   "description": "Sistema de Punto de Venta Moderno con Tickets Virtuales",
   "author": {
     "name": "BizneAI Team",
