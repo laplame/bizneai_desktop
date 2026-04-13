@@ -34,7 +34,7 @@ if (process.versions.modules !== PKG_NODE_MODULE_VERSION) {
       `Tu Node actual es ${process.version} (NODE_MODULE_VERSION=${process.versions.modules}). ` +
       'better-sqlite3 se instaló para otra versión → fallará al abrir SQLite.\n\n' +
       'Solución:\n' +
-      '  1) Instala Node 24 LTS desde https://nodejs.org (o nvm-windows: nvm install 24 && nvm use 24).\n' +
+      '  1) Instala Node 24.14.1 LTS desde https://nodejs.org (o nvm-windows: nvm install 24.14.1 && nvm use 24.14.1).\n' +
       '  2) Borra módulos nativos viejos y la caché de pkg, luego reempaqueta:\n' +
       '     rmdir /s /q standalone-local-api\\node_modules\n' +
       '     rmdir /s /q %USERPROFILE%\\.cache\\pkg\n' +

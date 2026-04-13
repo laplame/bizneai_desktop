@@ -41,9 +41,9 @@ if (install.status !== 0) {
 /** pkg embebe Node 24 (ABI 137); better-sqlite3 nativo debe coincidir. */
 if (process.platform === 'win32' && process.versions.modules !== '137') {
   console.warn(
-    '\n[pack:local-api] Aviso: para generar BizneAI-Local-API-Backend.exe hace falta Node 24 LTS ' +
+    '\n[pack:local-api] Aviso: para generar BizneAI-Local-API-Backend.exe usa Node 24.14.1 LTS ' +
       `(ahora: ${process.version}, NODE_MODULE_VERSION=${process.versions.modules}). ` +
-      'Si la ABI no coincide con el .exe, SQLite fallará; usa Node 24 y vuelve a `npm run pack:local-api` antes de `build:local-api-exe`.\n'
+      'Si la ABI no coincide con el .exe, SQLite fallará; alinea con `.nvmrc` y vuelve a `npm run pack:local-api` antes de `build:local-api-exe`.\n'
   );
 }
 

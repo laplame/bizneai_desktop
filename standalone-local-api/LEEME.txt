@@ -76,11 +76,12 @@ En una máquina Windows (o en GitHub Actions «Build Windows»), desde la raíz 
    npm run build:local-api-exe
 Salida típica: release\BizneAI-Local-API-Backend.exe
 
-Importante al generar el .exe: el empaquetador (pkg) incluye Node 24 (línea LTS
-«Krypton» en 2026; Node 25 es Current, no LTS, y pkg aún no publica base v25).
-El paso `npm run pack:local-api` debe ejecutarse con Node 24 LTS (misma «ABI»
+Importante al generar el .exe: el empaquetador (pkg) usa la base Node v24.14.1
+(línea LTS «Krypton»; Node 25 es Current, no LTS, y pkg aún no publica base v25).
+El paso `npm run pack:local-api` debe ejecutarse con Node 24.14.1 LTS (misma «ABI»
 que el .exe, NODE_MODULE_VERSION 137). Con Node 20/22/25 verás errores al usar
-/api/pos. Con otra versión: instala Node 24, borra standalone-local-api\node_modules
-y %USERPROFILE%\.cache\pkg, luego pack:local-api y build:local-api-exe.
+/api/pos. Con otra versión: instala Node 24.14.1 (ver `.nvmrc` en la raíz del repo),
+borra standalone-local-api\node_modules y %USERPROFILE%\.cache\pkg, luego
+pack:local-api y build:local-api-exe.
 No requiere Node en el PC de la tienda: los datos van en .\data\ junto al .exe
 (salvo que definas BIZNEAI_USER_DATA). Mismo puerto y /health que arriba.

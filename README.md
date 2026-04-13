@@ -49,7 +49,8 @@ Aplicación de punto de venta para escritorio (**Electron** + **React**) con ser
 
 ## Requisitos
 
-- **Node.js** 18 LTS o superior (incluye **npm**)
+- **Node.js** 18 LTS o superior (incluye **npm**) para desarrollo habitual (`npm run dev`, etc.).
+- Para generar **`BizneAI-Local-API-Backend.exe`** en Windows (empaquetado con `pkg`), usa **Node.js 24.14.1 LTS** — misma versión que CI y el archivo **`.nvmrc`** en la raíz; detalle en [Crear los ejecutables en Windows](#crear-los-ejecutables-en-windows-paso-a-paso-desde-el-código).
 - **Git** (solo si vas a clonar el repositorio para desarrollo)
 
 ### Instalar Node.js antes del proyecto (desarrollo o build local)
@@ -58,7 +59,7 @@ En la máquina donde ejecutarás `npm install` o generarás el instalador, sigue
 
 #### Windows
 
-1. Entra en [nodejs.org](https://nodejs.org) y descarga el instalador **LTS** (por ejemplo «20.x LTS»).
+1. Entra en [nodejs.org](https://nodejs.org) y descarga el instalador **LTS** (p. ej. **24.x**). Para el **API como .exe** (`build:local-api-exe`), instala **24.14.1** o usa [nvm-windows](https://github.com/coreybutler/nvm-windows) con la versión del **`.nvmrc`**.
 2. Ejecuta el `.msi` y acepta la licencia.
 3. Deja activada la opción **Add to PATH** / **añadir al PATH** (suele venir marcada).
 4. Completa la instalación con las opciones por defecto (incluye **npm**).
@@ -191,12 +192,12 @@ Hazlo en un PC **Windows x64** con el repositorio clonado y una terminal (PowerS
 
 | Requisito | Notas |
 |-----------|--------|
-| **Node.js 24 LTS** | Para **`npm run build:local-api-exe`** y para **`npm run pack:local-api`** previo: el `.exe` del API incluye **Node 24** (`pkg`); `better-sqlite3` debe instalarse con la **misma ABI** (p. ej. `NODE_MODULE_VERSION` **137**). Si en el equipo solo tienes **Node 25** u otra versión, instala también **24** (p. ej. [nvm-windows](https://github.com/coreybutler/nvm-windows): `nvm install 24`, `nvm use 24`) solo para esta sesión de build. En la raíz del repo hay un **`.nvmrc`** con `24` para quien use `nvm use`. |
+| **Node.js 24.14.1 LTS** | Para **`npm run build:local-api-exe`** y **`npm run pack:local-api`**: el `.exe` del API embebe la misma línea que **@yao-pkg/pkg** (base **v24.14.1**); `better-sqlite3` debe instalarse con la **misma ABI** (`NODE_MODULE_VERSION` **137**). Si tienes **Node 25** u otra versión, instala **24.14.1** aparte (p. ej. [nvm-windows](https://github.com/coreybutler/nvm-windows): `nvm install 24.14.1`, `nvm use 24.14.1`) solo al compilar el API. En la raíz hay **`.nvmrc`** con `24.14.1` → `nvm use` (Unix) o el equivalente en Windows. |
 | **npm** | Viene con Node; `npm ci` en CI o `npm install` en local. |
 | **Git** y espacio en disco | El build de Electron y dependencias ocupa varios GB. |
 | **Iconos** | Antes del instalador: `npm run generate-icons` (el workflow de GitHub Actions también lo ejecuta). |
 
-Para el **solo front** (`dist:win`), suele bastar con Node 20+ y `npm run fix-deps`; para el **`.exe` del API**, mantén **Node 24** activo en los pasos que generan `standalone-local-api\node_modules` y el binario `pkg`.
+Para el **solo front** (`dist:win`), suele bastar con Node 20+ y `npm run fix-deps`; para el **`.exe` del API**, mantén **Node 24.14.1** activo en los pasos que generan `standalone-local-api\node_modules` y el binario `pkg`.
 
 #### 2. Instalar dependencias del proyecto
 
@@ -212,7 +213,7 @@ npm install
 
 #### 3. Generar **ambos** `.exe` (recomendado)
 
-Con **Node 24** activo (`node -v` → v24.x):
+Con **Node 24.14.1** activo (`node -v` → `v24.14.1`):
 
 ```bash
 npm run generate-icons
@@ -233,13 +234,13 @@ Los scripts `dist:*` incluyen **bump de versión** en `package.json` (script `bu
 |----------|-----------------------------------|
 | Solo instalador / portable **Electron** | `npm run dist:win` |
 | Solo carpeta **portable del API** (Node + `start.cjs`, sin `.exe` único) | `npm run pack:local-api` → `release/bizneai-local-api-portable\` |
-| Solo **`BizneAI-Local-API-Backend.exe`** | Con **Node 24**: `npm run build:local-api-exe` (ya incluye `pack:local-api`) |
+| Solo **`BizneAI-Local-API-Backend.exe`** | Con **Node 24.14.1**: `npm run build:local-api-exe` (ya incluye `pack:local-api`) |
 
 #### 5. Si el API `.exe` falla al usar SQLite (`NODE_MODULE_VERSION` / `ERR_DLOPEN_FAILED`)
 
 Significa que `better-sqlite3` se compiló para otra versión de Node que la que lleva el `.exe` embebido.
 
-1. Activa **Node 24 LTS** (`nvm use 24` o equivalente).
+1. Activa **Node 24.14.1 LTS** (`nvm use 24.14.1` o `nvm use` leyendo `.nvmrc`).
 2. Borra módulos y caché de `pkg` y vuelve a empaquetar:
 
    ```text
@@ -254,11 +255,11 @@ Más contexto: [standalone-local-api/LEEME.txt](standalone-local-api/LEEME.txt).
 
 #### 6. Sin generar el `.exe` del API (solo Node 25 u otra versión)
 
-Puedes seguir usando **`npm run pack:local-api`** y en tienda la carpeta **`bizneai-local-api-portable`** con **`iniciar-api-local.bat`** y el **Node** que tengas instalado (la ABI coincide con ese Node). El `.exe` único **sí** exige el flujo con **Node 24** en la máquina que compila.
+Puedes seguir usando **`npm run pack:local-api`** y en tienda la carpeta **`bizneai-local-api-portable`** con **`iniciar-api-local.bat`** y el **Node** que tengas instalado (la ABI coincide con ese Node). El `.exe` único **sí** exige **Node 24.14.1** (o la versión fijada en `.nvmrc`) en la máquina que compila.
 
 #### 7. Alternativa: no compilar en local
 
-Descarga el artefacto **[Build Windows (PC)](#build-automático-con-github-actions)** (zip con `release/`). El workflow usa **Node 24** y genera front + `BizneAI-Local-API-Backend.exe`.
+Descarga el artefacto **[Build Windows (PC)](#build-automático-con-github-actions)** (zip con `release/`). El workflow usa **Node 24.14.1** y genera front + `BizneAI-Local-API-Backend.exe`.
 
 ### Windows en la tienda: usar el POS y el API local en el mismo PC
 
@@ -267,7 +268,7 @@ En un solo equipo hacen falta el **API** (puerto 3000, SQLite y persistencia) y 
 #### 1. Obtener los instalables
 
 - **Desde CI:** descarga el artefacto [Build Windows (PC)](#build-automático-con-github-actions) y descomprime `release/`. Incluirá, entre otros, `BizneAI-POS-Front-<versión>-Setup.exe` (o el portable) y `BizneAI-Local-API-Backend.exe`.
-- **Desde el código en Windows:** sigue [Crear los ejecutables en Windows (paso a paso, desde el código)](#crear-los-ejecutables-en-windows-paso-a-paso-desde-el-código) (`npm install`, **Node 24** para el API `.exe`, `npm run dist:win:all` o los comandos por partes).
+- **Desde el código en Windows:** sigue [Crear los ejecutables en Windows (paso a paso, desde el código)](#crear-los-ejecutables-en-windows-paso-a-paso-desde-el-código) (`npm install`, **Node 24.14.1** para el API `.exe`, `npm run dist:win:all` o los comandos por partes).
 
 #### 2. Instalar o colocar el API local
 
@@ -486,4 +487,4 @@ MIT — ver [LICENSE](LICENSE).
 
 ---
 
-BizneAI Team — versión **1.0.11** (abril 2026)
+BizneAI Team — versión **1.0.18** (abril 2026)
