@@ -173,14 +173,92 @@ En un PC de tienda con **Windows** intervienen **dos componentes**, que instalas
 
 Guía detallada en la misma máquina: [Windows en la tienda: usar el POS y el API local en el mismo PC](#windows-en-la-tienda-usar-el-pos-y-el-api-local-en-el-mismo-pc).
 
-**Generación de los dos `.exe` en Windows (front y API por separado):**
+**Generación de los dos `.exe` en Windows (resumen):**
 
-- **Front (Electron):** `npm run dist:win` deja en `release/` algo como `BizneAI-POS-Front-<versión>-Setup.exe` (NSIS) y `BizneAI-POS-Front-<versión>-Portable.exe` (portable).
-- **Solo API:** en **Windows** (o en CI), `npm run build:local-api-exe` genera `release/BizneAI-Local-API-Backend.exe` (Node embebido; en tienda no hace falta instalar Node). Cadena que construye ambos: `npm run dist:win:all` (solo Windows).
+- **Front (Electron):** `npm run dist:win` → en `release/`: `BizneAI-POS-Front-<versión>-Setup.exe` (NSIS) y `BizneAI-POS-Front-<versión>-Portable.exe`.
+- **API local (un solo .exe):** `npm run build:local-api-exe` → `release/BizneAI-Local-API-Backend.exe` (Node embebido con `pkg`; en tienda no hace falta instalar Node).
+- **Ambos a la vez:** `npm run dist:win:all` (solo en **Windows**).
 
 Si el API ya usa el puerto 3000, el POS reutiliza ese servicio y no inicia otro servidor.
 
 > En macOS, el build de Windows a menudo falla por módulos nativos (`better-sqlite3`, etc.). Conviene usar [GitHub Actions](#build-automático-con-github-actions) con un runner Windows.
+
+### Crear los ejecutables en Windows (paso a paso, desde el código)
+
+Hazlo en un PC **Windows x64** con el repositorio clonado y una terminal (PowerShell o **cmd** como administrador solo si hace falta para enlaces simbólicos de `npm`).
+
+#### 1. Requisitos
+
+| Requisito | Notas |
+|-----------|--------|
+| **Node.js 24 LTS** | Para **`npm run build:local-api-exe`** y para **`npm run pack:local-api`** previo: el `.exe` del API incluye **Node 24** (`pkg`); `better-sqlite3` debe instalarse con la **misma ABI** (p. ej. `NODE_MODULE_VERSION` **137**). Si en el equipo solo tienes **Node 25** u otra versión, instala también **24** (p. ej. [nvm-windows](https://github.com/coreybutler/nvm-windows): `nvm install 24`, `nvm use 24`) solo para esta sesión de build. En la raíz del repo hay un **`.nvmrc`** con `24` para quien use `nvm use`. |
+| **npm** | Viene con Node; `npm ci` en CI o `npm install` en local. |
+| **Git** y espacio en disco | El build de Electron y dependencias ocupa varios GB. |
+| **Iconos** | Antes del instalador: `npm run generate-icons` (el workflow de GitHub Actions también lo ejecuta). |
+
+Para el **solo front** (`dist:win`), suele bastar con Node 20+ y `npm run fix-deps`; para el **`.exe` del API**, mantén **Node 24** activo en los pasos que generan `standalone-local-api\node_modules` y el binario `pkg`.
+
+#### 2. Instalar dependencias del proyecto
+
+En la **raíz** del repo:
+
+```bash
+git clone <url-del-repo>
+cd bizneai_desktop
+npm install
+```
+
+(O `npm ci` si copias `package-lock.json` íntegro y quieres un árbol reproducible.)
+
+#### 3. Generar **ambos** `.exe` (recomendado)
+
+Con **Node 24** activo (`node -v` → v24.x):
+
+```bash
+npm run generate-icons
+npm run dist:win:all
+```
+
+Eso ejecuta, en orden: ajuste de dependencias nativas, build del cliente, bundle del servidor, **electron-builder** (front) y empaquetado **pkg** del API. Los artefactos quedan en **`release/`**, entre otros:
+
+- `BizneAI-POS-Front-<versión>-Setup.exe`, `BizneAI-POS-Front-<versión>-Portable.exe`
+- `BizneAI-Local-API-Backend.exe`
+- `win-unpacked\`, `latest.yml`, etc. (metadatos del front)
+
+Los scripts `dist:*` incluyen **bump de versión** en `package.json` (script `bump-version`); si no quieres subir versión en cada prueba, revisa `package.json` o usa solo los subpasos de la siguiente tabla.
+
+#### 4. Generar **solo** el front o **solo** el API
+
+| Objetivo | Comando (Windows, raíz del repo) |
+|----------|-----------------------------------|
+| Solo instalador / portable **Electron** | `npm run dist:win` |
+| Solo carpeta **portable del API** (Node + `start.cjs`, sin `.exe` único) | `npm run pack:local-api` → `release/bizneai-local-api-portable\` |
+| Solo **`BizneAI-Local-API-Backend.exe`** | Con **Node 24**: `npm run build:local-api-exe` (ya incluye `pack:local-api`) |
+
+#### 5. Si el API `.exe` falla al usar SQLite (`NODE_MODULE_VERSION` / `ERR_DLOPEN_FAILED`)
+
+Significa que `better-sqlite3` se compiló para otra versión de Node que la que lleva el `.exe` embebido.
+
+1. Activa **Node 24 LTS** (`nvm use 24` o equivalente).
+2. Borra módulos y caché de `pkg` y vuelve a empaquetar:
+
+   ```text
+   rmdir /s /q standalone-local-api\node_modules
+   rmdir /s /q %USERPROFILE%\.cache\pkg
+   npm run build:local-api-exe
+   ```
+
+3. Sustituye el `.exe` antiguo por el nuevo en la carpeta de despliegue.
+
+Más contexto: [standalone-local-api/LEEME.txt](standalone-local-api/LEEME.txt).
+
+#### 6. Sin generar el `.exe` del API (solo Node 25 u otra versión)
+
+Puedes seguir usando **`npm run pack:local-api`** y en tienda la carpeta **`bizneai-local-api-portable`** con **`iniciar-api-local.bat`** y el **Node** que tengas instalado (la ABI coincide con ese Node). El `.exe` único **sí** exige el flujo con **Node 24** en la máquina que compila.
+
+#### 7. Alternativa: no compilar en local
+
+Descarga el artefacto **[Build Windows (PC)](#build-automático-con-github-actions)** (zip con `release/`). El workflow usa **Node 24** y genera front + `BizneAI-Local-API-Backend.exe`.
 
 ### Windows en la tienda: usar el POS y el API local en el mismo PC
 
@@ -189,7 +267,7 @@ En un solo equipo hacen falta el **API** (puerto 3000, SQLite y persistencia) y 
 #### 1. Obtener los instalables
 
 - **Desde CI:** descarga el artefacto [Build Windows (PC)](#build-automático-con-github-actions) y descomprime `release/`. Incluirá, entre otros, `BizneAI-POS-Front-<versión>-Setup.exe` (o el portable) y `BizneAI-Local-API-Backend.exe`.
-- **Desde el código en Windows:** en la raíz del repo, con Node instalado: `npm install` y luego `npm run dist:win:all` para generar ambos `.exe` en `release/` (o por separado `npm run dist:win` y `npm run build:local-api-exe`).
+- **Desde el código en Windows:** sigue [Crear los ejecutables en Windows (paso a paso, desde el código)](#crear-los-ejecutables-en-windows-paso-a-paso-desde-el-código) (`npm install`, **Node 24** para el API `.exe`, `npm run dist:win:all` o los comandos por partes).
 
 #### 2. Instalar o colocar el API local
 

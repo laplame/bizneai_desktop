@@ -4,7 +4,7 @@
   "version": "1.0.14",
   "description": "API local BizneAI (Express + SQLite) para ejecutar aparte del POS",
   "engines": {
-    "node": ">=20 <21"
+    "node": ">=24 <25"
   },
   "main": "start.cjs",
   "bin": "start.cjs",
@@ -20,7 +20,7 @@
       "node_modules/file-uri-to-path/**/*"
     ],
     "targets": [
-      "node20-win-x64"
+      "node24-win-x64"
     ]
   },
   "dependencies": {
