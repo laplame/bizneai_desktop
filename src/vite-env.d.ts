@@ -6,7 +6,8 @@ interface ElectronAPI {
   printReceipt?: (
     receiptData: ReceiptPrintData,
     pageSize?: '57mm' | '58mm' | '80mm',
-    printerName?: string
+    printerName?: string,
+    generic80mmFallback?: boolean
   ) => Promise<{ success: boolean; error?: string }>;
   openDbConsole?: () => Promise<{ ok?: boolean }>;
   minimizeDbConsoleWindow?: () => Promise<{ ok?: boolean }>;
@@ -18,6 +19,9 @@ interface ElectronAPI {
     embeddedNodeExists?: boolean;
     platform?: string;
   }>;
+  pickTicketLogo?: () => Promise<{ path: string | null; error?: string }>;
+  removeTicketLogo?: () => Promise<{ ok?: boolean }>;
+  ticketLogoDataUrl?: (absPath: string) => Promise<string>;
 }
 
 interface ReceiptPrintData {

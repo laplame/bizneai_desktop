@@ -1,4 +1,4 @@
-import { app, BrowserWindow, session, shell, ipcMain } from 'electron';
+import { app, BrowserWindow, session, shell, ipcMain, dialog } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
@@ -300,13 +300,33 @@ function createWindow() {
 }
 
 /** Convierte datos de venta en contenido para impresora térmica */
-function buildReceiptPrintData({ storeName, saleId, date, items, subtotal, tax, total, paymentMethod, copyLabel }, pageSize = '80mm') {
+function buildReceiptPrintData(
+  { storeName, saleId, date, items, subtotal, tax, total, paymentMethod, copyLabel, ticketLogoPath },
+  pageSize = '80mm'
+) {
   const isWide = pageSize === '80mm';
   const copyFontSize = isWide ? '17px' : '13px';
-  const lines = [
+  const lines = [];
+  if (ticketLogoPath && typeof ticketLogoPath === 'string') {
+    const logoFs = path.normalize(ticketLogoPath.trim());
+    try {
+      if (fs.existsSync(logoFs)) {
+        lines.push({
+          type: 'image',
+          path: logoFs,
+          position: 'center',
+          width: isWide ? '200px' : '156px',
+          height: '72px',
+        });
+      }
+    } catch {
+      /* ignore logo errors */
+    }
+  }
+  lines.push(
     { type: 'text', value: storeName || 'BizneAI POS', style: { fontWeight: '700', textAlign: 'center', fontSize: isWide ? '18px' : '16px' } },
     { type: 'text', value: '------------------------', style: { textAlign: 'center', fontSize: '11px' } },
-  ];
+  );
   if (copyLabel && String(copyLabel).trim()) {
     lines.push({
       type: 'text',
@@ -352,21 +372,93 @@ function buildReceiptPrintData({ storeName, saleId, date, items, subtotal, tax, 
 }
 
 /**
- * Nombre de impresora para PosPrinter: el configurado o la predeterminada del sistema.
- * En Windows, `webContents.print({ silent: true })` suele fallar sin `deviceName` explícito.
+ * Impresoras «Generic / Text Only» (varios idiomas) o equivalentes sin driver del fabricante.
  */
-async function resolveThermalPrinterName(preferred) {
-  const p = preferred && String(preferred).trim();
-  if (p) return p;
-  if (!posMainWindow || posMainWindow.isDestroyed()) return undefined;
+function findGenericTextOnlyPrinter(list) {
+  for (const pr of list) {
+    const n = String(pr.name || '');
+    if (
+      /generic\s*\/\s*text|text\s*only|solo\s*texto|gen[eé]rico\s*\/\s*solo/i.test(n) &&
+      !/pdf|print to pdf|xps document|onenote|fax/i.test(n)
+    ) {
+      return pr.name;
+    }
+  }
+  return undefined;
+}
+
+/** PDF / XPS del sistema cuando no hay térmica (ticket sigue a 80 mm en el layout). */
+function findPdfOrXpsPrinter(list) {
+  for (const pr of list) {
+    const n = String(pr.name || '').toLowerCase();
+    if (n.includes('print to pdf') || n.includes('impresión en pdf') || n.includes('microsoft print to pdf')) {
+      return pr.name;
+    }
+    if (n.includes('xps document') || n.includes('documento xps')) {
+      return pr.name;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Cola de impresión para PosPrinter: nombre explícito, predeterminada, genérica 80 mm o PDF.
+ * `generic80mmFallback`: priorizar Generic/Text Only → PDF/XPS → predeterminada → primera.
+ */
+async function resolveThermalPrinterName(preferred, generic80mmFallback = false) {
+  const pref = preferred && String(preferred).trim();
+  if (!posMainWindow || posMainWindow.isDestroyed()) {
+    return pref || undefined;
+  }
+
+  let list = [];
   try {
-    const list = await posMainWindow.webContents.getPrintersAsync();
-    const def = list.find((x) => x.isDefault);
-    return def?.name || list[0]?.name;
+    list = await posMainWindow.webContents.getPrintersAsync();
   } catch (e) {
     console.warn('[Print] No se pudo listar impresoras:', e?.message || e);
-    return undefined;
+    return pref || undefined;
   }
+
+  const L = Array.isArray(list) ? list : [];
+  if (L.length === 0) {
+    return pref || undefined;
+  }
+
+  const byExact = (name) => L.find((p) => p.name === name);
+
+  if (pref && byExact(pref)) {
+    return pref;
+  }
+
+  if (generic80mmFallback) {
+    const g = findGenericTextOnlyPrinter(L);
+    if (g) {
+      console.log('[Print] Usando impresora genérica / solo texto:', g);
+      return g;
+    }
+    const pdf = findPdfOrXpsPrinter(L);
+    if (pdf) {
+      console.log('[Print] Sin Generic/Text: usando cola PDF/XPS:', pdf);
+      return pdf;
+    }
+    const def = L.find((p) => p.isDefault);
+    if (def) return def.name;
+    return L[0].name;
+  }
+
+  const def = L.find((p) => p.isDefault);
+  if (def) return def.name;
+
+  if (pref && !byExact(pref)) {
+    return pref;
+  }
+
+  const g = findGenericTextOnlyPrinter(L);
+  if (g) return g;
+  const pdf = findPdfOrXpsPrinter(L);
+  if (pdf) return pdf;
+
+  return L[0]?.name;
 }
 
 function probeBackendHealthOnce() {
@@ -516,10 +608,77 @@ app.whenReady().then(async () => {
     return { ok: true };
   });
 
-  ipcMain.handle('print-receipt', async (_event, { receiptData, pageSize = '80mm', printerName }) => {
+  ipcMain.handle('pick-ticket-logo', async () => {
+    const parent = BrowserWindow.getFocusedWindow() || posMainWindow;
+    const { canceled, filePaths } = await dialog.showOpenDialog(parent ?? undefined, {
+      title: 'Logo del ticket',
+      filters: [{ name: 'Imágenes', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
+      properties: ['openFile'],
+    });
+    if (canceled || !filePaths?.[0]) return { path: null };
+    const src = filePaths[0];
+    const dir = path.join(app.getPath('userData'), 'receipt-assets');
+    fs.mkdirSync(dir, { recursive: true });
+    const extRaw = (path.extname(src) || '.png').toLowerCase();
+    const safeExt = ['.png', '.jpg', '.jpeg', '.webp'].includes(extRaw) ? extRaw : '.png';
+    const dest = path.join(dir, `ticket-logo${safeExt}`);
+    try {
+      fs.copyFileSync(src, dest);
+      return { path: dest };
+    } catch (e) {
+      return { path: null, error: e?.message || String(e) };
+    }
+  });
+
+  ipcMain.handle('remove-ticket-logo', async () => {
+    const dir = path.join(app.getPath('userData'), 'receipt-assets');
+    for (const name of ['ticket-logo.png', 'ticket-logo.jpg', 'ticket-logo.jpeg', 'ticket-logo.webp']) {
+      try {
+        const p = path.join(dir, name);
+        if (fs.existsSync(p)) fs.unlinkSync(p);
+      } catch {
+        /* ignore */
+      }
+    }
+    return { ok: true };
+  });
+
+  /** Vista previa HTML: imagen como data URL (evita bloqueos de file:// en ventanas auxiliares). */
+  ipcMain.handle('ticket-logo-data-url', (_e, absPath) => {
+    try {
+      if (!absPath || typeof absPath !== 'string') return '';
+      const n = path.normalize(absPath.trim());
+      const ud = path.resolve(app.getPath('userData'));
+      const resolved = path.resolve(n);
+      const rel = path.relative(ud, resolved);
+      if (rel.startsWith('..') || path.isAbsolute(rel)) {
+        return '';
+      }
+      if (!fs.existsSync(resolved)) return '';
+      const st = fs.statSync(resolved);
+      if (!st.isFile() || st.size > 2 * 1024 * 1024) return '';
+      const buf = fs.readFileSync(resolved);
+      const ext = path.extname(resolved).toLowerCase();
+      const mime =
+        ext === '.png'
+          ? 'image/png'
+          : ext === '.jpg' || ext === '.jpeg'
+            ? 'image/jpeg'
+            : ext === '.webp'
+              ? 'image/webp'
+              : 'image/png';
+      return `data:${mime};base64,${buf.toString('base64')}`;
+    } catch {
+      return '';
+    }
+  });
+
+  ipcMain.handle(
+    'print-receipt',
+    async (_event, { receiptData, pageSize = '80mm', printerName, generic80mmFallback = false }) => {
     try {
       const printData = buildReceiptPrintData(receiptData, pageSize);
-      const resolvedName = await resolveThermalPrinterName(printerName);
+      const resolvedName = await resolveThermalPrinterName(printerName, !!generic80mmFallback);
       const options = {
         preview: false,
         silent: true,

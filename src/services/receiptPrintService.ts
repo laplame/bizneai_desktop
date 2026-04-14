@@ -28,6 +28,8 @@ export interface ReceiptPrintData {
    * Leyenda ya resuelta (ORIGINAL / COPIA). La rellena `printReceipt` salvo que venga fijada (p. ej. pruebas).
    */
   copyLabel?: string;
+  /** Ruta absoluta a PNG/JPEG/WebP en disco (solo Electron; la guarda Configuración). */
+  ticketLogoPath?: string;
 }
 
 const STORAGE_KEY = 'bizneai-receipt-print';
@@ -38,6 +40,11 @@ export interface ReceiptPrintConfig {
   enabled: boolean;
   pageSize: ReceiptPageSize;
   printerName?: string;
+  /**
+   * Sin driver de la térmica: priorizar «Generic / Text Only», PDF del sistema u otra cola antes de fallar.
+   * El ticket sigue generándose a 80 mm (u otro ancho configurado).
+   */
+  generic80mmFallback?: boolean;
   storeName?: string;
   /** Mostrar leyenda ORIGINAL / COPIA en tickets de venta (80 mm recomendado) */
   showTicketCopyType: boolean;
@@ -45,16 +52,20 @@ export interface ReceiptPrintConfig {
   labelOriginal: string;
   /** Texto reimpresiones y siguientes */
   labelCopia: string;
+  /** Ruta absoluta al archivo de logo copiado en datos de la app (elige en Configuración). */
+  ticketLogoPath?: string;
 }
 
 const DEFAULT_CONFIG: ReceiptPrintConfig = {
   enabled: true,
   pageSize: '80mm',
   printerName: undefined,
+  generic80mmFallback: false,
   storeName: 'BizneAI POS',
   showTicketCopyType: true,
   labelOriginal: 'ORIGINAL',
   labelCopia: 'COPIA',
+  ticketLogoPath: undefined,
 };
 
 export function getReceiptPrintConfig(): ReceiptPrintConfig {
@@ -131,13 +142,15 @@ export async function printReceipt(data: ReceiptPrintData): Promise<{ success: b
     storeName: data.storeName || config.storeName || 'BizneAI POS',
     ticketKind,
     copyLabel,
+    ticketLogoPath: config.ticketLogoPath ?? data.ticketLogoPath,
   };
 
   try {
     const result = await window.electronAPI!.printReceipt!(
       receiptData,
       config.pageSize,
-      config.printerName
+      config.printerName,
+      config.generic80mmFallback === true
     );
     const ok = result?.success === true;
     if (ok) {
@@ -247,8 +260,9 @@ function openHtmlInPrintWindow(html: string): { success: boolean; error?: string
  * (elige impresora térmica, impresora normal o «Guardar como PDF»).
  * Funciona en Electron y en navegador.
  */
-export function openReceiptPrintPreviewDialog(): { success: boolean; error?: string } {
+export async function openReceiptPrintPreviewDialog(): Promise<{ success: boolean; error?: string }> {
   const cfg = getReceiptPrintConfig();
+  const logoHtml = await ticketLogoBlockHtml(cfg.ticketLogoPath);
   const storeName = resolveStoreNameForPrint();
   const copyLabel = cfg.showTicketCopyType ? cfg.labelOriginal : '';
   const saleId = `PREVIEW-${Date.now()}`;
@@ -298,8 +312,10 @@ export function openReceiptPrintPreviewDialog(): { success: boolean; error?: str
     .total-line { font-weight: 700; font-size: 14px; margin-top: 6px; }
     .footer { text-align: center; margin-top: 12px; font-style: italic; color: #444; }
     .hint { margin-top: 16px; padding: 8px; background: #f1f5f9; border-radius: 6px; font-size: 10px; color: #475569; }
+    .ticket-logo img { display: inline-block; }
     @media print { .no-print { display: none !important; } }
   </style></head><body>
+  ${logoHtml}
   <div class="store">${escapeHtml(storeName)}</div>
   <div class="rule">------------------------</div>
   ${copyBlock}
@@ -336,12 +352,29 @@ function formatPaymentLabelForPreview(method?: string): string {
   return m[method] || method;
 }
 
+/** Bloque HTML con &lt;img&gt; para vista previa (data URL desde el proceso principal). */
+async function ticketLogoBlockHtml(logoPath?: string): Promise<string> {
+  const p = logoPath?.trim();
+  if (!p || !isElectron() || !window.electronAPI?.ticketLogoDataUrl) return '';
+  try {
+    const src = await window.electronAPI.ticketLogoDataUrl(p);
+    if (!src) return '';
+    const safe = src.replace(/"/g, '&quot;');
+    return `<div class="ticket-logo" style="text-align:center;margin-bottom:10px"><img src="${safe}" alt="" style="max-width:100%;max-height:72px;object-fit:contain"/></div>`;
+  } catch {
+    return '';
+  }
+}
+
 /**
  * Misma vista que la prueba de Configuración, pero con datos reales de venta/lista.
  * Útil cuando PosPrinter falla o no hay app desktop (elige impresora o PDF).
  */
-export function openReceiptPrintPreviewForData(data: ReceiptPrintData): { success: boolean; error?: string } {
+export async function openReceiptPrintPreviewForData(
+  data: ReceiptPrintData
+): Promise<{ success: boolean; error?: string }> {
   const cfg = getReceiptPrintConfig();
+  const logoHtml = await ticketLogoBlockHtml(data.ticketLogoPath || cfg.ticketLogoPath);
   const storeName = data.storeName || resolveStoreNameForPrint();
   const width = receiptPreviewWidthCss(cfg.pageSize);
   const copyLabel =
@@ -392,8 +425,10 @@ export function openReceiptPrintPreviewForData(data: ReceiptPrintData): { succes
     .total-line { font-weight: 700; font-size: 14px; margin-top: 6px; }
     .footer { text-align: center; margin-top: 12px; font-style: italic; color: #444; }
     .hint { margin-top: 16px; padding: 8px; background: #f1f5f9; border-radius: 6px; font-size: 10px; color: #475569; }
+    .ticket-logo img { display: inline-block; }
     @media print { .no-print { display: none !important; } }
   </style></head><body>
+  ${logoHtml}
   <div class="store">${escapeHtml(storeName)}</div>
   <div class="rule">------------------------</div>
   ${copyBlock}
@@ -439,7 +474,7 @@ export async function printReceiptThermalOrDialog(
     const r = await printReceipt(data);
     if (r.success) return r;
     console.warn('[ReceiptPrint] Térmica falló, usando cuadro de impresión:', r.error);
-    const pv = openReceiptPrintPreviewForData(data);
+    const pv = await openReceiptPrintPreviewForData(data);
     if (!pv.success) {
       return { success: false, error: r.error || pv.error || 'No se pudo imprimir' };
     }
@@ -447,10 +482,10 @@ export async function printReceiptThermalOrDialog(
   }
 
   if (isElectron() && userExplicit && !config.enabled) {
-    return openReceiptPrintPreviewForData(data);
+    return await openReceiptPrintPreviewForData(data);
   }
 
-  return openReceiptPrintPreviewForData(data);
+  return await openReceiptPrintPreviewForData(data);
 }
 
 /**
@@ -485,10 +520,15 @@ export async function printReceiptTestThermal(): Promise<{ success: boolean; err
   };
 
   try {
-    const result = await window.electronAPI!.printReceipt!(full, cfg.pageSize, cfg.printerName);
+    const result = await window.electronAPI!.printReceipt!(
+      full,
+      cfg.pageSize,
+      cfg.printerName,
+      cfg.generic80mmFallback === true
+    );
     const ok = result?.success === true;
     if (ok) return { success: true };
-    const pv = openReceiptPrintPreviewForData(full);
+    const pv = await openReceiptPrintPreviewForData(full);
     if (!pv.success) {
       return { success: false, error: result?.error || pv.error || 'No se pudo abrir el cuadro de impresión' };
     }
@@ -496,7 +536,7 @@ export async function printReceiptTestThermal(): Promise<{ success: boolean; err
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.warn('[ReceiptPrint] Prueba térmica:', msg);
-    const pv = openReceiptPrintPreviewForData(full);
+    const pv = await openReceiptPrintPreviewForData(full);
     if (pv.success) return { success: true };
     return { success: false, error: msg };
   }
@@ -548,6 +588,7 @@ export async function printProductCatalog(
   const storeName = resolveStoreNameForPrint();
   const subtotal = lines.reduce((s, l) => s + l.price, 0);
 
+  const cfgCatalog = getReceiptPrintConfig();
   const catalogData: ReceiptPrintData = {
     storeName,
     saleId: `LISTA-${Date.now()}`,
@@ -563,6 +604,7 @@ export async function printProductCatalog(
     total: subtotal,
     paymentMethod: 'Lista de precios',
     ticketKind: 'catalog',
+    ticketLogoPath: cfgCatalog.ticketLogoPath,
   };
 
   if (isElectron() && getReceiptPrintConfig().enabled) {
@@ -572,7 +614,7 @@ export async function printProductCatalog(
       openBrowserPrintCatalog(lines, storeName);
       return { success: true };
     } catch (e) {
-      const preview = openReceiptPrintPreviewForData(catalogData);
+      const preview = await openReceiptPrintPreviewForData(catalogData);
       if (preview.success) return { success: true };
       const msg = e instanceof Error ? e.message : String(e);
       return { success: false, error: thermal.error || preview.error || msg };

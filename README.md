@@ -155,7 +155,7 @@ npm run preview   # vista previa del build estático
 
 ```bash
 npm run dist:mac     # macOS (DMG / ZIP)
-npm run dist:win     # Windows (NSIS / portable); en Mac puede fallar por nativos → usar CI
+npm run dist:win     # Windows (NSIS / portable + API .exe solo en Windows); en Mac/Linux el .exe del API se omite; el build del front puede fallar por nativos → usar CI
 npm run dist:linux   # Linux (AppImage / deb)
 ```
 
@@ -170,15 +170,15 @@ En un PC de tienda con **Windows** intervienen **dos componentes**, que instalas
 
 **Orden recomendado:** primero el **servidor BD** (en ejecución y con [http://127.0.0.1:3000/health](http://127.0.0.1:3000/health) respondiendo bien), después el **Win Setup** del POS. Si el puerto 3000 ya está ocupado por el API, el POS **no** levanta un segundo servidor: reutiliza el existente.
 
-**Resumen:** obtén ambos artefactos desde CI ([Build Windows](#build-automático-con-github-actions)) o, en un PC con Node, con `npm run dist:win:all`; deja el API en una ruta fija; ejecuta el `.exe` del API (o los `.bat` del paquete portable); instala el **Setup** del front y abre el POS. Para arranque automático del API, usa los scripts de `standalone-local-api/` (detalle en [LEEME.txt](standalone-local-api/LEEME.txt)).
+**Resumen:** obtén ambos artefactos desde CI ([Build Windows](#build-automático-con-github-actions)) o, en **Windows** con Node, con `npm run dist:win` (front + `BizneAI-Local-API-Backend.exe`; en otros SO el script omite el `.exe` del API). Deja el API en una ruta fija; ejecuta el `.exe` del API (o los `.bat` del paquete portable); instala el **Setup** del front y abre el POS. Para arranque automático del API, usa los scripts de `standalone-local-api/` (detalle en [LEEME.txt](standalone-local-api/LEEME.txt)).
 
 Guía detallada en la misma máquina: [Windows en la tienda: usar el POS y el API local en el mismo PC](#windows-en-la-tienda-usar-el-pos-y-el-api-local-en-el-mismo-pc).
 
 **Generación de los dos `.exe` en Windows (resumen):**
 
-- **Front (Electron):** `npm run dist:win` → en `release/`: `BizneAI-POS-Front-<versión>-Setup.exe` (NSIS) y `BizneAI-POS-Front-<versión>-Portable.exe`.
+- **Front (Electron):** `npm run dist:win:front` → en `release/`: `BizneAI-POS-Front-<versión>-Setup.exe` (NSIS) y `BizneAI-POS-Front-<versión>-Portable.exe`.
 - **API local (un solo .exe):** `npm run build:local-api-exe` → `release/BizneAI-Local-API-Backend.exe` (Node embebido con `pkg`; en tienda no hace falta instalar Node).
-- **Ambos a la vez:** `npm run dist:win:all` (solo en **Windows**).
+- **Ambos a la vez (recomendado en Windows):** `npm run dist:win` (equivale a `dist:win:front` + `build:local-api-exe`; alias retrocompatible: `dist:win:all`).
 
 Si el API ya usa el puerto 3000, el POS reutiliza ese servicio y no inicia otro servidor.
 
@@ -197,7 +197,7 @@ Hazlo en un PC **Windows x64** con el repositorio clonado y una terminal (PowerS
 | **Git** y espacio en disco | El build de Electron y dependencias ocupa varios GB. |
 | **Iconos** | Antes del instalador: `npm run generate-icons` (el workflow de GitHub Actions también lo ejecuta). |
 
-Para el **solo front** (`dist:win`), suele bastar con Node 20+ y `npm run fix-deps`; para el **`.exe` del API**, mantén **Node 24.14.1** activo en los pasos que generan `standalone-local-api\node_modules` y el binario `pkg`.
+Para el **solo front** (`dist:win:front`), suele bastar con Node 20+ y `npm run fix-deps`; para el **`.exe` del API** (incluido en `dist:win` en Windows), mantén **Node 24.14.1** activo en los pasos que generan `standalone-local-api\node_modules` y el binario `pkg`.
 
 #### 2. Instalar dependencias del proyecto
 
@@ -217,7 +217,7 @@ Con **Node 24.14.1** activo (`node -v` → `v24.14.1`):
 
 ```bash
 npm run generate-icons
-npm run dist:win:all
+npm run dist:win
 ```
 
 Eso ejecuta, en orden: ajuste de dependencias nativas, build del cliente, bundle del servidor, **electron-builder** (front) y empaquetado **pkg** del API. Los artefactos quedan en **`release/`**, entre otros:
@@ -232,7 +232,7 @@ Los scripts `dist:*` incluyen **bump de versión** en `package.json` (script `bu
 
 | Objetivo | Comando (Windows, raíz del repo) |
 |----------|-----------------------------------|
-| Solo instalador / portable **Electron** | `npm run dist:win` |
+| Solo instalador / portable **Electron** | `npm run dist:win:front` |
 | Solo carpeta **portable del API** (Node + `start.cjs`, sin `.exe` único) | `npm run pack:local-api` → `release/bizneai-local-api-portable\` |
 | Solo **`BizneAI-Local-API-Backend.exe`** | Con **Node 24.14.1**: `npm run build:local-api-exe` (ya incluye `pack:local-api`) |
 
@@ -268,7 +268,7 @@ En un solo equipo hacen falta el **API** (puerto 3000, SQLite y persistencia) y 
 #### 1. Obtener los instalables
 
 - **Desde CI:** descarga el artefacto [Build Windows (PC)](#build-automático-con-github-actions) y descomprime `release/`. Incluirá, entre otros, `BizneAI-POS-Front-<versión>-Setup.exe` (o el portable) y `BizneAI-Local-API-Backend.exe`.
-- **Desde el código en Windows:** sigue [Crear los ejecutables en Windows (paso a paso, desde el código)](#crear-los-ejecutables-en-windows-paso-a-paso-desde-el-código) (`npm install`, **Node 24.14.1** para el API `.exe`, `npm run dist:win:all` o los comandos por partes).
+- **Desde el código en Windows:** sigue [Crear los ejecutables en Windows (paso a paso, desde el código)](#crear-los-ejecutables-en-windows-paso-a-paso-desde-el-código) (`npm install`, **Node 24.14.1** para el API `.exe`, `npm run dist:win` o los comandos por partes).
 
 #### 2. Instalar o colocar el API local
 
@@ -329,7 +329,9 @@ Guía ampliada: [docs/BUILD-LINUX.md](docs/BUILD-LINUX.md).
 | `npm run build:server` | Empaqueta el API Express en `dist-backend/bizneai-server.cjs` (para Electron embebido) |
 | `npm run pack:local-api` | Genera un **paquete portable solo del API** (Node + dependencias + bundle) en `release/bizneai-local-api-portable/` para ejecutarlo aparte del POS (ver `standalone-local-api/LEEME.txt`) |
 | `npm run build:local-api-exe` | Solo **Windows:** empaqueta el API en `release/BizneAI-Local-API-Backend.exe` (tras `pack:local-api`; incluye `better-sqlite3` win32) |
-| `npm run dist:win:all` | Solo **Windows:** `dist:win` (Electron) + `build:local-api-exe` (dos `.exe` en `release/`) |
+| `npm run dist:win:front` | Instalador/portable **Electron** (sin generar el `.exe` del API) |
+| `npm run dist:win` | Tras el front, en **Windows** ejecuta `build:local-api-exe`; en otros SO omite el API con mensaje (dos `.exe` en `release/` solo en Windows) |
+| `npm run dist:win:all` | Alias de `dist:win` |
 | `npm run lint` | ESLint |
 | `npm run electron:dev` | Desarrollo completo con Electron |
 | `npm run fix-deps` | Ajuste de dependencias (p. ej. antes de `dist:*`) |

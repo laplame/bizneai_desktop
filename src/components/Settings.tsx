@@ -1815,8 +1815,8 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
                 <button
                   type="button"
                   className="btn-secondary"
-                  onClick={() => {
-                    const r = openReceiptPrintPreviewDialog();
+                  onClick={async () => {
+                    const r = await openReceiptPrintPreviewDialog();
                     if (r.success) {
                       toast.success('Vista previa: elige impresora o Guardar como PDF');
                     } else {
@@ -1886,6 +1886,52 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
                 <small className="form-hint">Texto que aparece en el encabezado del ticket.</small>
               </div>
               <div className="form-group">
+                <label className="form-label">Logo en el ticket (PNG, JPG, WebP)</label>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center' }}>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={async () => {
+                      const api = window.electronAPI;
+                      if (!api?.pickTicketLogo) {
+                        toast.error('No disponible');
+                        return;
+                      }
+                      const r = await api.pickTicketLogo();
+                      if (r?.error) {
+                        toast.error(r.error);
+                        return;
+                      }
+                      if (r?.path) {
+                        setReceiptPrintConfig({ ticketLogoPath: r.path });
+                        setReceiptPrintConfigState((prev) => ({ ...prev, ticketLogoPath: r.path }));
+                        toast.success('Logo guardado; se verá en el ticket y en la vista previa');
+                      }
+                    }}
+                  >
+                    Elegir imagen…
+                  </button>
+                  {receiptPrintConfig.ticketLogoPath ? (
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={async () => {
+                        await window.electronAPI?.removeTicketLogo?.();
+                        setReceiptPrintConfig({ ticketLogoPath: undefined });
+                        setReceiptPrintConfigState((prev) => ({ ...prev, ticketLogoPath: undefined }));
+                        toast.success('Logo quitado');
+                      }}
+                    >
+                      Quitar logo
+                    </button>
+                  ) : null}
+                </div>
+                <small className="form-hint">
+                  Aparece encima del nombre del negocio. PNG con fondo transparente funciona bien; el ticket térmico lo
+                  escala al ancho del papel (80 mm recomendado para logos anchos).
+                </small>
+              </div>
+              <div className="form-group">
                 <label className="form-label">Impresora térmica en el sistema (opcional)</label>
                 <input
                   type="text"
@@ -1904,6 +1950,31 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
                 <small className="form-hint">
                   Si lo dejas vacío, PosPrinter usa la <strong>impresora predeterminada</strong>. Si la térmica no es la
                   predeterminada, escribe aquí el nombre exacto (evita timeouts si apuntaba a otra impresora).
+                </small>
+              </div>
+              <div className="form-group">
+                <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={receiptPrintConfig.generic80mmFallback === true}
+                    onChange={(e) => {
+                      const v = e.target.checked;
+                      setReceiptPrintConfig({ generic80mmFallback: v });
+                      setReceiptPrintConfigState((prev) => ({ ...prev, generic80mmFallback: v }));
+                      toast.success(
+                        v
+                          ? 'Modo genérico 80 mm: se buscará Generic/Text Only o PDF si no hay driver térmico'
+                          : 'Modo genérico desactivado'
+                      );
+                    }}
+                  />
+                  Sin driver del fabricante: impresora genérica 80 mm
+                </label>
+                <small className="form-hint" style={{ display: 'block', marginTop: '0.35rem' }}>
+                  Actívalo si aún no instalaste el driver USB/Ethernet de la térmica. En Windows puedes añadir manualmente
+                  una cola <strong>Generic / Text Only</strong> (o «Genérico / Solo texto») con papel 80 mm; si no existe,
+                  la app intentará <strong>Microsoft Print to PDF</strong> o la impresora predeterminada. El ticket sigue
+                  formateado al ancho elegido arriba (p. ej. 80 mm).
                 </small>
               </div>
               <div className="form-group">
@@ -1965,8 +2036,8 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
                   <button
                     type="button"
                     className="btn-secondary"
-                    onClick={() => {
-                      const r = openReceiptPrintPreviewDialog();
+                    onClick={async () => {
+                      const r = await openReceiptPrintPreviewDialog();
                       if (r.success) {
                         toast.success('Se abrió la vista previa y el cuadro de impresión (PDF o impresora)');
                       } else {
