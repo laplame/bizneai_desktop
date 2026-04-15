@@ -410,7 +410,7 @@ Usa esta lista **solo** si el instalador del POS **no** incluye Node embebido y 
 
 2. **Puerto 3000 libre** en el PC de tienda. Si otro proceso lo usa, el arranque fallará. En Windows: `netstat -ano | findstr :3000` en **cmd** o Monitor de recursos → Red.
 
-Más detalle sobre almacenamiento y sincronización: [docs/LOCAL_DATABASE_AND_API_SYNC.md](docs/LOCAL_DATABASE_AND_API_SYNC.md).
+Más detalle sobre almacenamiento y sincronización: [docs/LOCAL_DATABASE_AND_API_SYNC.md](docs/LOCAL_DATABASE_AND_API_SYNC.md). Clientes por tienda, backup local y API: [docs/CUSTOMERS_SHOP_AND_SYNC.md](docs/CUSTOMERS_SHOP_AND_SYNC.md). Qué documentación aplica al POS Electron frente a la app móvil: [docs/ELECTRON_DESKTOP_REFERENCE.md](docs/ELECTRON_DESKTOP_REFERENCE.md).
 
 ## Estructura del proyecto
 
@@ -467,6 +467,8 @@ Usa GitHub Actions (sección anterior); no dependas de compilación cruzada de m
 - [docs/BUILD-LINUX.md](docs/BUILD-LINUX.md)
 - [docs/backend-impuestos-producto.md](docs/backend-impuestos-producto.md)
 - [docs/LOCAL_DATABASE_AND_API_SYNC.md](docs/LOCAL_DATABASE_AND_API_SYNC.md) — almacenamiento local (`localStorage`, SQLite del servidor), MCP, ventas y proxy
+- [docs/CUSTOMERS_SHOP_AND_SYNC.md](docs/CUSTOMERS_SHOP_AND_SYNC.md) — clientes por tienda, condiciones comerciales opcionales, backup local y sincronización con la API MCP
+- [docs/ELECTRON_DESKTOP_REFERENCE.md](docs/ELECTRON_DESKTOP_REFERENCE.md) — alcance escritorio vs docs móviles; modelo `RegistryCustomer` y sync MCP
 - [API_ENDPOINTS.md](API_ENDPOINTS.md)
 - [INSTALLERS.md](INSTALLERS.md)
 - [TROUBLESHOOTING.md](TROUBLESHOOTING.md)

@@ -5,6 +5,7 @@
 import { normalizeProductId } from './productId';
 import { getLocalApiOrigin, shouldUseSalesMcpProxy } from './localApiBase';
 import { scheduleMirrorKeyToSqlite } from '../services/posPersistService';
+import { MCP_SNAPSHOT, mirrorMcpPayloadToLocalSql } from '../services/mcpSnapshotMirror';
 /**
  * Get the shop ID from localStorage or context
  * @returns Shop ID string or null if not found
@@ -106,8 +107,16 @@ export const getShopDataFromMcp = async (): Promise<any | null> => {
   try {
     const response = await fetch(mcpUrl);
     if (response.ok) {
-      const data = await response.json();
-      return data.data || data;
+      const raw = await response.json();
+      const sid = getShopId();
+      if (sid) {
+        void mirrorMcpPayloadToLocalSql({
+          shopId: sid,
+          resourcePath: MCP_SNAPSHOT.root,
+          payload: raw,
+        });
+      }
+      return raw.data || raw;
     }
     return null;
   } catch (error) {
@@ -193,8 +202,15 @@ export const getProductsFromMcp = async (): Promise<any[] | null> => {
     if (response.ok) {
       const data = await response.json();
       const shopData = data.data || data;
-      const mcpProducts = shopData.products || [];
       const shopId = shopData?.shop?._id || getShopId();
+      if (shopId) {
+        void mirrorMcpPayloadToLocalSql({
+          shopId: String(shopId),
+          resourcePath: MCP_SNAPSHOT.root,
+          payload: data,
+        });
+      }
+      const mcpProducts = shopData.products || [];
       const shopProducts = shopId ? await getProductsFromShopApi(shopId) : [];
       const shopProductIndex = buildShopProductIndex(shopProducts);
 

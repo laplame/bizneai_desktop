@@ -70,6 +70,20 @@ Sin shop configurado, parte de la lógica remota no corre; el registro de activi
 
 **Sincronización en segundo plano:** `src/utils/syncService.ts` — si pasaron ~24 h (`bizneai-last-sync`), intenta `runBackgroundSync` (MCP + merge + evento `products-updated`). La carga manual desde Configuración sigue el mismo patrón de fetch + merge.
 
+## Clientes (customers): backup local y API MCP
+
+Los clientes están **acotados por `shopId`** en el backend; el contrato HTTP común es `GET` / `POST` / `PUT` bajo **`/api/mcp/:shopId/customers`** (listado con `?status=active|inactive`, actualización por `customerId` lógico). Detalle de campos opcionales (`priceType`, `commercialConditions`, etc.) y comportamiento de la app móvil: **[docs/CUSTOMERS_SHOP_AND_SYNC.md](./CUSTOMERS_SHOP_AND_SYNC.md)**.
+
+En el **POS de escritorio**:
+
+| Pieza | Rol |
+|-------|-----|
+| **`bizneai-customers-registry`** (`localStorage`) | Registro editable en la sección Clientes; código en `src/services/customerRegistry.ts`. |
+| **SQLite local (`/api/pos/kv`)** | Espejo opcional de la misma clave si el API local corre (`src/services/posPersistService.ts`), para persistencia en disco en la máquina. |
+| **Backup por lotes MCP** | El lote `localCustomers` copia el registro a **`bizneai-full-backup-local-customers`** (snapshot; `snapshotLocalCustomers` en `src/services/mcpBatchSync.ts`). Refuerza la copia local dentro del flujo de backup completo; **no** sustituye por sí solo un merge bidireccional con el servidor remoto. |
+
+El registro sigue siendo **local-first** (offline siempre disponible). Con `shopId` válido, el cliente puede **pull/merge y push** vía `customerMcpSync.ts` (véase [CUSTOMERS_SHOP_AND_SYNC.md](./CUSTOMERS_SHOP_AND_SYNC.md) y [ELECTRON_DESKTOP_REFERENCE.md](./ELECTRON_DESKTOP_REFERENCE.md)). Mantén backup local (KV + backups completos).
+
 ## Ventas (local → API remota)
 
 - **Escritura principal:** `createSale` en `src/api/sales.ts` hace `POST` con payload `ShopTransaction` (incluye `clientEventId` nuevo por intento para idempotencia en servidor).
@@ -157,6 +171,7 @@ Esquema de tablas previstas y estado del proyecto: [DATABASE_SYSTEM.md](../DATAB
 | Dirección | Qué | Mecanismo |
 |-----------|-----|-----------|
 | API → cliente | Productos, datos de shop, transacciones MCP | `fetch` MCP/proxy + merge → `localStorage` |
+| API ↔ cliente | Clientes por tienda (cuando esté integrado del todo) | `GET`/`POST`/`PUT` `/api/mcp/:shopId/customers`; hoy el POS guarda sobre todo en `bizneai-customers-registry` + snapshot de backup |
 | Cliente → API | Venta | `POST` Sales API (proxy en dev) |
 | Cliente → API | Bloque diario Merkle | `POST` blocks (proxy en dev) |
 | Cliente → servidor local | Actividad PIN/venta cajero | `POST` `/api/local-activity/*` + SQLite (solo si origin localhost en el cliente) |
@@ -174,6 +189,7 @@ Esquema de tablas previstas y estado del proyecto: [DATABASE_SYSTEM.md](../DATAB
 | `src/services/localActivityLog.ts` | Dual-write actividad |
 | `server/src/localActivityDb.ts` | Esquema SQLite actividad |
 | `server/src/routes/mcpProxyRoutes.ts` | Proxy hacia bizneai.com |
+| `docs/CUSTOMERS_SHOP_AND_SYNC.md` | Clientes por `shopId`, rutas MCP, condiciones comerciales, backup local en escritorio |
 | `docs/# Datos enviados al servidor y endpoints.md` | Detalle de payloads/endpoints (si está actualizado en tu copia) |
 
 ---

@@ -36,6 +36,11 @@ import {
   computeCustomerStatus,
   getCustomerStatusLabel,
 } from '../services/customerRegistry';
+import {
+  canSyncCustomersToMcp,
+  pullCustomersFromMcp,
+  syncCustomerToMcpAfterSave,
+} from '../services/customerMcpSync';
 
 interface Purchase {
   id: number;
@@ -94,6 +99,8 @@ const CustomerManagement = ({ isOpen, onClose }: CustomerManagementProps) => {
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const [editingCustomer, setEditingCustomer] = useState<Partial<Customer>>({});
   const [selectedCustomerForDetails, setSelectedCustomerForDetails] = useState<Customer | null>(null);
+  const [mcpBanner, setMcpBanner] = useState<string | null>(null);
+  const [mcpPulling, setMcpPulling] = useState(false);
 
   useEffect(() => {
     if (isOpen) {
@@ -102,11 +109,41 @@ const CustomerManagement = ({ isOpen, onClose }: CustomerManagementProps) => {
       setCustomers(loaded);
       setPurchases(samplePurchases);
       setFilteredCustomers(loaded);
+      setMcpBanner(null);
       if (isShopIdConfigured() && isBatchDue('localCustomers')) {
         void syncMcpBatch('localCustomers', { force: true });
       }
+      if (canSyncCustomersToMcp()) {
+        void pullCustomersFromMcp().then((r) => {
+          if (r.ok) {
+            const after = loadCustomers();
+            setCustomers(after);
+            setFilteredCustomers(after);
+          }
+        });
+      }
     }
   }, [isOpen]);
+
+  const handleMcpRefresh = () => {
+    if (!canSyncCustomersToMcp()) {
+      setMcpBanner('Configura un shopId válido en Ajustes para sincronizar clientes con la nube.');
+      return;
+    }
+    setMcpPulling(true);
+    setMcpBanner(null);
+    void pullCustomersFromMcp().then((r) => {
+      setMcpPulling(false);
+      if (r.ok) {
+        const after = loadCustomers();
+        setCustomers(after);
+        setFilteredCustomers(after);
+        setMcpBanner(`Lista actualizada (${r.count ?? 0} clientes en servidor).`);
+      } else {
+        setMcpBanner(r.error || 'No se pudo sincronizar.');
+      }
+    });
+  };
 
   useEffect(() => {
     filterCustomers();
@@ -170,9 +207,18 @@ const CustomerManagement = ({ isOpen, onClose }: CustomerManagementProps) => {
   };
 
   const handleSaveCustomer = () => {
+    const nameTrim = String(editingCustomer.firstName ?? '').trim();
+    if (!nameTrim) {
+      window.alert('Indica al menos el nombre del cliente.');
+      return;
+    }
+
     if (isAddModalOpen) {
       const nextId = customers.length ? Math.max(...customers.map((c) => c.id)) + 1 : 1;
-      const draft = { ...editingCustomer } as Customer;
+      const draft = {
+        ...(editingCustomer as Customer),
+        firstName: nameTrim,
+      } as Customer;
       const newCustomer: Customer = {
         ...draft,
         id: nextId,
@@ -184,17 +230,42 @@ const CustomerManagement = ({ isOpen, onClose }: CustomerManagementProps) => {
       setCustomers(next);
       saveCustomers(next);
       setIsAddModalOpen(false);
+      if (canSyncCustomersToMcp()) {
+        void syncCustomerToMcpAfterSave(newCustomer).then((remote) => {
+          if (!remote) return;
+          setCustomers((prev) => {
+            const upd = prev.map((x) => (x.id === remote.id ? remote : x));
+            saveCustomers(upd);
+            return upd;
+          });
+        });
+      }
     } else if (isEditModalOpen && selectedCustomer) {
       const updated = customers.map((c) => {
         if (c.id !== selectedCustomer.id) return c;
-        const merged = { ...(editingCustomer as Customer), updatedAt: new Date().toISOString() };
+        const merged = {
+          ...(editingCustomer as Customer),
+          firstName: nameTrim,
+          updatedAt: new Date().toISOString(),
+        };
         merged.customerStatus = computeCustomerStatus(merged);
         return merged;
       });
+      const row = updated.find((c) => c.id === selectedCustomer.id);
       setCustomers(updated);
       saveCustomers(updated);
       setIsEditModalOpen(false);
       setSelectedCustomer(null);
+      if (row && canSyncCustomersToMcp()) {
+        void syncCustomerToMcpAfterSave(row).then((remote) => {
+          if (!remote) return;
+          setCustomers((prev) => {
+            const upd = prev.map((x) => (x.id === remote.id ? remote : x));
+            saveCustomers(upd);
+            return upd;
+          });
+        });
+      }
     }
     setEditingCustomer({});
   };
@@ -244,8 +315,8 @@ const CustomerManagement = ({ isOpen, onClose }: CustomerManagementProps) => {
         </button>
       </div>
       
-      <div className="form-content">
-        <div className="form-grid">
+      <div className="customer-form-modal-scroll">
+        <div className="form-grid customer-form-grid">
           <div className="form-group">
             <label>Nombre *</label>
             <input
@@ -253,36 +324,40 @@ const CustomerManagement = ({ isOpen, onClose }: CustomerManagementProps) => {
               value={editingCustomer.firstName || ''}
               onChange={(e) => setEditingCustomer({...editingCustomer, firstName: e.target.value})}
               placeholder="Ej: María"
+              autoComplete="given-name"
             />
           </div>
 
           <div className="form-group">
-            <label>Apellido *</label>
+            <label>Apellido</label>
             <input
               type="text"
               value={editingCustomer.lastName || ''}
               onChange={(e) => setEditingCustomer({...editingCustomer, lastName: e.target.value})}
-              placeholder="Ej: González"
+              placeholder="Opcional"
+              autoComplete="family-name"
             />
           </div>
 
           <div className="form-group">
-            <label>Email *</label>
+            <label>Email</label>
             <input
               type="email"
               value={editingCustomer.email || ''}
               onChange={(e) => setEditingCustomer({...editingCustomer, email: e.target.value})}
-              placeholder="maria@email.com"
+              placeholder="Opcional"
+              autoComplete="email"
             />
           </div>
 
           <div className="form-group">
-            <label>Teléfono *</label>
+            <label>Teléfono</label>
             <input
               type="tel"
               value={editingCustomer.phone || ''}
               onChange={(e) => setEditingCustomer({...editingCustomer, phone: e.target.value})}
-              placeholder="+52 55 1234 5678"
+              placeholder="Opcional"
+              autoComplete="tel"
             />
           </div>
 
@@ -384,20 +459,20 @@ const CustomerManagement = ({ isOpen, onClose }: CustomerManagementProps) => {
             </div>
           </div>
         </div>
+      </div>
 
-        <div className="form-actions">
-          <button className="btn-secondary" onClick={() => {
-            setIsAddModalOpen(false);
-            setIsEditModalOpen(false);
-            setEditingCustomer({});
-          }}>
-            Cancelar
-          </button>
-          <button className="btn-primary" onClick={handleSaveCustomer}>
-            <UserPlus size={16} />
-            Guardar Cliente
-          </button>
-        </div>
+      <div className="customer-form-modal-footer form-actions">
+        <button type="button" className="btn-secondary" onClick={() => {
+          setIsAddModalOpen(false);
+          setIsEditModalOpen(false);
+          setEditingCustomer({});
+        }}>
+          Cancelar
+        </button>
+        <button type="button" className="btn-primary" onClick={handleSaveCustomer}>
+          <UserPlus size={16} />
+          Guardar Cliente
+        </button>
       </div>
     </div>
   );
@@ -470,16 +545,33 @@ const CustomerManagement = ({ isOpen, onClose }: CustomerManagementProps) => {
                 <td>
                   <span className="crm-status-label">{getCustomerStatusLabel(customer.customerStatus)}</span>
                 </td>
-                <td>
-                  <div className="action-buttons">
-                    <button className="action-btn" onClick={() => setSelectedCustomerForDetails(customer)} title="Ver detalles">
+                <td className="customers-table-actions-cell">
+                  <div className="customers-table-actions">
+                    <button
+                      type="button"
+                      className="customers-row-btn customers-row-btn--ghost"
+                      onClick={() => setSelectedCustomerForDetails(customer)}
+                      title="Ver detalles"
+                    >
                       <Eye size={16} />
                     </button>
-                    <button className="action-btn" onClick={() => handleEditCustomer(customer)} title="Editar">
+                    <button
+                      type="button"
+                      className="customers-row-btn customers-row-btn--edit"
+                      onClick={() => handleEditCustomer(customer)}
+                      title="Editar cliente"
+                    >
                       <Edit size={16} />
+                      Editar
                     </button>
-                    <button className="action-btn" onClick={() => handleDeleteCustomer(customer.id)} title="Eliminar">
+                    <button
+                      type="button"
+                      className="customers-row-btn customers-row-btn--delete"
+                      onClick={() => handleDeleteCustomer(customer.id)}
+                      title="Eliminar cliente"
+                    >
                       <Trash2 size={16} />
+                      Eliminar
                     </button>
                   </div>
                 </td>
@@ -776,6 +868,32 @@ const CustomerManagement = ({ isOpen, onClose }: CustomerManagementProps) => {
             </div>
           </div>
         </div>
+        <div className="customer-details-footer">
+          <button
+            type="button"
+            className="customers-row-btn customers-row-btn--edit"
+            onClick={() => {
+              const c = selectedCustomerForDetails;
+              setSelectedCustomerForDetails(null);
+              handleEditCustomer(c);
+            }}
+          >
+            <Edit size={16} />
+            Editar
+          </button>
+          <button
+            type="button"
+            className="customers-row-btn customers-row-btn--delete"
+            onClick={() => {
+              const id = selectedCustomerForDetails.id;
+              setSelectedCustomerForDetails(null);
+              handleDeleteCustomer(id);
+            }}
+          >
+            <Trash2 size={16} />
+            Eliminar
+          </button>
+        </div>
       </div>
     );
   };
@@ -788,7 +906,13 @@ const CustomerManagement = ({ isOpen, onClose }: CustomerManagementProps) => {
         <div className="management-header">
           <h2>Gestión de Clientes</h2>
           <div className="header-actions">
-            <button className="action-btn" title="Actualizar">
+            <button
+              type="button"
+              className="action-btn"
+              title="Sincronizar con la nube (MCP)"
+              disabled={mcpPulling}
+              onClick={handleMcpRefresh}
+            >
               <RefreshCw size={20} />
             </button>
             <button className="action-btn" title="Exportar">
@@ -803,6 +927,12 @@ const CustomerManagement = ({ isOpen, onClose }: CustomerManagementProps) => {
             </button>
           </div>
         </div>
+
+        {mcpBanner && (
+          <div className="customer-mcp-banner" style={{ padding: '8px 16px', fontSize: 13, color: '#475569' }}>
+            {mcpBanner}
+          </div>
+        )}
 
         <div className="management-content">
           {/* Filtros y búsqueda */}

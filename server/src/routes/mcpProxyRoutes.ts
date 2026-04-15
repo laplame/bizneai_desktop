@@ -137,6 +137,7 @@ const MCP_GET_SUBPATHS = [
   'blocks/summary',
   'cash-register/sessions',
   'cash-register/status',
+  'customers',
   'inventory/history',
   'inventory/low-stock',
   'inventory/status',
@@ -174,6 +175,42 @@ function registerMcpGetProxy(subpath: string) {
 for (const sub of MCP_GET_SUBPATHS) {
   registerMcpGetProxy(sub);
 }
+
+/** POST /api/proxy/mcp/:shopId/customers — alta de cliente MCP */
+router.post('/mcp/:shopId/customers', async (req, res) => {
+  const { shopId } = req.params;
+  const targetUrl = `${BIZNEAI_ORIGIN}/api/mcp/${shopId}/customers`;
+  try {
+    const response = await axios.post(targetUrl, req.body, {
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      timeout: 15000,
+      validateStatus: () => true,
+    });
+    res.status(response.status).json(response.data);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Proxy error';
+    console.error('[MCP customers POST]', message);
+    res.status(502).json({ success: false, error: message });
+  }
+});
+
+/** PUT /api/proxy/mcp/:shopId/customers/:customerId — actualización MCP */
+router.put('/mcp/:shopId/customers/:customerId', async (req, res) => {
+  const { shopId, customerId } = req.params;
+  const targetUrl = `${BIZNEAI_ORIGIN}/api/mcp/${shopId}/customers/${encodeURIComponent(customerId)}`;
+  try {
+    const response = await axios.put(targetUrl, req.body, {
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      timeout: 15000,
+      validateStatus: () => true,
+    });
+    res.status(response.status).json(response.data);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Proxy error';
+    console.error('[MCP customers PUT]', message);
+    res.status(502).json({ success: false, error: message });
+  }
+});
 
 /** POST /api/proxy/discount-qr/verify - Proxy para verificar código QR de descuento */
 router.post('/discount-qr/verify', async (req, res) => {

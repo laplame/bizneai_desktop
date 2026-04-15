@@ -5197,7 +5197,7 @@ html, body {
   border: 1px solid var(--bs-dark-border);
   border-radius: var(--bs-radius-lg);
   width: 100%;
-  max-width: 900px;
+  max-width: min(1280px, 98vw);
   max-height: 95vh;
   overflow: hidden;
   box-shadow: var(--bs-shadow-lg);
@@ -5216,7 +5216,7 @@ html, body {
   border-radius: var(--bs-radius-lg);
   width: 90%;
   max-width: 900px;
-  max-height: 90vh;
+  max-height: min(90vh, 720px);
   overflow: hidden;
   box-shadow: var(--bs-shadow-lg);
   z-index: 2100;
@@ -5224,12 +5224,47 @@ html, body {
   flex-direction: column;
 }
 
+.customer-form-modal .form-header {
+  flex-shrink: 0;
+}
+
+.customer-form-modal-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 1.5rem;
+  -webkit-overflow-scrolling: touch;
+}
+
+.customer-form-modal .customer-form-grid {
+  margin-bottom: 0;
+}
+
+.customer-form-modal .form-group label {
+  color: var(--bs-dark-text, #e2e8f0);
+}
+
+.customer-form-modal-footer {
+  flex-shrink: 0;
+  padding: 1rem 1.5rem 1.25rem;
+  border-top: 1px solid var(--bs-dark-border);
+  background: var(--bs-dark-surface);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  justify-content: flex-end;
+  align-items: center;
+}
+
 /* Customers Table */
 .customers-list {
   background: white;
   border: 1px solid #e2e8f0;
   border-radius: 12px;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: visible;
+  -webkit-overflow-scrolling: touch;
 }
 
 .customers-table {
@@ -5254,6 +5289,84 @@ html, body {
 
 .customers-table tr:hover {
   background: #f8fafc;
+}
+
+/* Columna Acciones: visible al hacer scroll horizontal (sticky a la derecha) */
+.customers-table th:last-child,
+.customers-table td.customers-table-actions-cell {
+  position: sticky;
+  right: 0;
+  z-index: 2;
+  min-width: 200px;
+  box-shadow: -6px 0 12px -4px rgba(15, 23, 42, 0.12);
+}
+
+.customers-table thead th:last-child {
+  background: #f8fafc;
+  z-index: 3;
+}
+
+.customers-table td.customers-table-actions-cell {
+  background: #fff;
+  vertical-align: middle;
+}
+
+.customers-table tr:hover td.customers-table-actions-cell {
+  background: #f8fafc;
+}
+
+.customers-table-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  justify-content: flex-end;
+}
+
+.customers-row-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.6rem;
+  border-radius: 8px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.customers-row-btn--ghost {
+  background: #f1f5f9;
+  color: #475569;
+  border-color: #e2e8f0;
+}
+
+.customers-row-btn--ghost:hover {
+  background: #e2e8f0;
+  color: #1e293b;
+}
+
+.customers-row-btn--edit {
+  background: #eff6ff;
+  color: #1d4ed8;
+  border-color: #bfdbfe;
+}
+
+.customers-row-btn--edit:hover {
+  background: #dbeafe;
+  border-color: #93c5fd;
+}
+
+.customers-row-btn--delete {
+  background: #fef2f2;
+  color: #b91c1c;
+  border-color: #fecaca;
+}
+
+.customers-row-btn--delete:hover {
+  background: #fee2e2;
+  border-color: #f87171;
 }
 
 .crm-status-label {
@@ -5429,6 +5542,18 @@ html, body {
 
 .details-content {
   padding: 1.5rem;
+}
+
+.customer-details-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  justify-content: flex-end;
+  align-items: center;
+  padding: 1rem 1.5rem 1.25rem;
+  border-top: 1px solid #e2e8f0;
+  background: #f8fafc;
+  border-radius: 0 0 12px 12px;
 }
 
 .customer-profile {
