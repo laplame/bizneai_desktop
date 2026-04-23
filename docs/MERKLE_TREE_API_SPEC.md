@@ -1,17 +1,21 @@
 # Especificación: Envío de Merkle Tree y Bloques a la API
 
-## 1. Estado actual
+> **Contrato de recepción en el backend MCP (Zod, idempotencia, summary, ventas):** [`MERKLE_MCP_BACKEND_RECEPCION.md`](./MERKLE_MCP_BACKEND_RECEPCION.md).  
+> **Sincronización POS ↔ API (ledger dev, `blocks/summary`, widget):** [`MERKLE_SYNC_POS_API.md`](./MERKLE_SYNC_POS_API.md).
 
-**El servidor NO recibe actualmente** ningún dato del Merkle tree ni del estado de bloques.
+## 1. Estado actual (cliente vs API de referencia)
 
-| Dato | Cliente (app) | Servidor (API) |
-|------|---------------|----------------|
-| Hash de transacción | ✅ Generado en `recordSaleCreation()` | ❌ No recibe |
-| Merkle proof | ✅ Generado al crear bloque | ❌ No recibe |
-| Block hash | ✅ Generado en `generateDailyBlock()` | ❌ No recibe |
-| Merkle root | ✅ En cada bloque | ❌ No recibe |
+En **este monorepo (POS)** el cliente **sí genera** hash de transacción, pruebas Merkle al cerrar bloque, `blockHash` y `merkleRoot` por bloque (`merkleTreeService.ts`), y puede **enviar** bloques con `blockApiService.ts` hacia `POST /api/mcp/:shopId/blocks`.
 
-El payload actual de `POST /api/mcp/:shopId/sales` incluye solo los datos de la venta (items, total, customerName, etc.), sin información criptográfica.
+En el **API BizneAI** (fuera de este repo), la recepción de esos datos y de los campos Merkle opcionales en ventas está descrita en **`MERKLE_MCP_BACKEND_RECEPCION.md`**: el backend valida con Zod, aplica idempotencia en bloques y persiste `merkleProof: []` en ventas si el cliente lo envía.
+
+| Dato | Cliente (este repo) | Servidor (API MCP de referencia) |
+|------|---------------------|----------------------------------|
+| Hash de transacción | ✅ `recordSaleCreation()` | ✅ Recibido en `POST …/blocks` y opcional en `POST …/sales` |
+| Merkle proof | ✅ Al generar bloque | ✅ En transacciones del bloque; ventas opcionales |
+| Block hash / root | ✅ `generateDailyBlock()` | ✅ `POST …/blocks` |
+
+El POS **puede** ampliar `POST /api/mcp/:shopId/sales` con los campos Merkle opcionales (sección 3.1 más abajo); hasta que el checkout los rellene, el body puede ir sin ellos.
 
 ---
 

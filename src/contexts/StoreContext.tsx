@@ -58,6 +58,11 @@ export const StoreProvider: React.FC<StoreProviderProps> = ({ children }) => {
     try {
       localStorage.setItem('bizneai-store-identifiers', JSON.stringify(updatedIdentifiers));
       scheduleMirrorKeyToSqlite('bizneai-store-identifiers');
+      try {
+        window.dispatchEvent(new Event('bizneai-store-identifiers-updated'));
+      } catch {
+        /* ignore */
+      }
     } catch (error) {
       console.error('Error saving store identifiers:', error);
     }
@@ -74,6 +79,11 @@ export const StoreProvider: React.FC<StoreProviderProps> = ({ children }) => {
     });
     localStorage.removeItem('bizneai-store-identifiers');
     scheduleMirrorKeyToSqlite('bizneai-store-identifiers');
+    try {
+      window.dispatchEvent(new Event('bizneai-store-identifiers-updated'));
+    } catch {
+      /* ignore */
+    }
   };
 
   const isStoreConfigured = !!(storeIdentifiers._id && storeIdentifiers.clientId);

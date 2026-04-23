@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { 
   Users, 
   Plus, 
@@ -27,7 +27,8 @@ import {
   BarChart3,
   FileText
 } from 'lucide-react';
-import type { RegistryCustomer as Customer } from '../types/customerRegistry';
+import { toast } from 'react-hot-toast';
+import type { CustomerStatus, RegistryCustomer as Customer } from '../types/customerRegistry';
 import { isShopIdConfigured } from '../utils/shopIdHelper';
 import { isBatchDue, syncMcpBatch } from '../utils/syncService';
 import {
@@ -35,60 +36,64 @@ import {
   saveCustomers,
   computeCustomerStatus,
   getCustomerStatusLabel,
+  getCustomerFullName,
 } from '../services/customerRegistry';
+import { summarizeMerkleSalesForRegistryCustomer } from '../services/merkleTreeService';
 import {
   canSyncCustomersToMcp,
   pullCustomersFromMcp,
   syncCustomerToMcpAfterSave,
 } from '../services/customerMcpSync';
-
-interface Purchase {
-  id: number;
-  customerId: number;
-  date: string;
-  total: number;
-  items: number;
-  paymentMethod: string;
-  status: 'completed' | 'pending' | 'cancelled';
-}
+import type { CustomerAccountAdjustmentKind } from '../types/saleWaitlistCredit';
+import {
+  appendLedgerEntry,
+  getCustomerAccountBalance,
+  listLedgerForCustomer,
+} from '../services/customerAccountLedger';
 
 interface CustomerManagementProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
+/** Totales mostrados: máximo entre registro local y ventas en historial Merkle (evita $0 si hubo cobros POS). */
+function getMergedPosDisplay(
+  c: Customer,
+  summary: ReturnType<typeof summarizeMerkleSalesForRegistryCustomer> | undefined
+): { spent: number; orders: number; lastPurchaseIso: string; crmStatus: CustomerStatus } {
+  const s = summary ?? { rows: [], totalSpent: 0, orderCount: 0, lastDate: null };
+  const spent = Math.max(c.totalSpent ?? 0, s.totalSpent);
+  const orders = Math.max(c.totalOrders ?? 0, s.orderCount);
+  let lastPurchaseIso = c.lastPurchase || '';
+  if (s.lastDate) {
+    const tM = new Date(s.lastDate).getTime();
+    const tR = c.lastPurchase ? new Date(c.lastPurchase).getTime() : NaN;
+    if (!c.lastPurchase?.trim() || !Number.isFinite(tR) || tM > tR) {
+      lastPurchaseIso = new Date(tM).toISOString();
+    }
+  }
+  const crmStatus = computeCustomerStatus({ ...c, totalSpent: spent, totalOrders: orders });
+  return { spent, orders, lastPurchaseIso, crmStatus };
+}
+
 const membershipLevels = ['bronze', 'silver', 'gold', 'platinum'];
 const genders = ['male', 'female', 'other'];
 
-// Datos de ejemplo para compras (historial demo en ficha de cliente)
-const generateSamplePurchases = (): Purchase[] => {
-  const purchases: Purchase[] = [];
-  const customers = loadCustomers();
-  
-  customers.forEach(customer => {
-    const numPurchases = Math.floor(Math.random() * 10) + 1;
-    for (let i = 0; i < numPurchases; i++) {
-      const date = new Date();
-      date.setDate(date.getDate() - Math.floor(Math.random() * 365));
-      
-      purchases.push({
-        id: purchases.length + 1,
-        customerId: customer.id,
-        date: date.toISOString(),
-        total: Math.random() * 100 + 10,
-        items: Math.floor(Math.random() * 5) + 1,
-        paymentMethod: ['cash', 'card', 'crypto', 'codi'][Math.floor(Math.random() * 4)],
-        status: 'completed'
-      });
-    }
-  });
-  
-  return purchases.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-};
+function formatPaymentMethodLabel(method: string): string {
+  const m = String(method).toLowerCase();
+  const map: Record<string, string> = {
+    cash: 'Efectivo',
+    card: 'Tarjeta',
+    crypto: 'Crypto',
+    codi: 'CODI',
+    credit: 'Crédito / diferido',
+    mixed: 'Pago mixto',
+  };
+  return map[m] ?? method;
+}
 
 const CustomerManagement = ({ isOpen, onClose }: CustomerManagementProps) => {
   const [customers, setCustomers] = useState<Customer[]>([]);
-  const [purchases, setPurchases] = useState<Purchase[]>([]);
   const [filteredCustomers, setFilteredCustomers] = useState<Customer[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [membershipFilter, setMembershipFilter] = useState('all');
@@ -101,27 +106,51 @@ const CustomerManagement = ({ isOpen, onClose }: CustomerManagementProps) => {
   const [selectedCustomerForDetails, setSelectedCustomerForDetails] = useState<Customer | null>(null);
   const [mcpBanner, setMcpBanner] = useState<string | null>(null);
   const [mcpPulling, setMcpPulling] = useState(false);
+  const [ledgerTick, setLedgerTick] = useState(0);
+  const [merkleTick, setMerkleTick] = useState(0);
+  const [adjKind, setAdjKind] = useState<CustomerAccountAdjustmentKind>('anticipo');
+  const [adjAmount, setAdjAmount] = useState('');
+  const [adjNotaId, setAdjNotaId] = useState('');
+  const [adjNote, setAdjNote] = useState('');
+
+  useEffect(() => {
+    const onLed = () => setLedgerTick((n) => n + 1);
+    const onMerkle = () => setMerkleTick((n) => n + 1);
+    window.addEventListener('customer-ledger-updated', onLed);
+    window.addEventListener('merkle-sales-updated', onMerkle);
+    return () => {
+      window.removeEventListener('customer-ledger-updated', onLed);
+      window.removeEventListener('merkle-sales-updated', onMerkle);
+    };
+  }, []);
+
+  const merklePosByCustomerId = useMemo(() => {
+    void merkleTick;
+    const m = new Map<number, ReturnType<typeof summarizeMerkleSalesForRegistryCustomer>>();
+    for (const c of customers) {
+      m.set(c.id, summarizeMerkleSalesForRegistryCustomer(c.id, getCustomerFullName(c)));
+    }
+    return m;
+  }, [customers, merkleTick]);
+
+  useEffect(() => {
+    setAdjAmount('');
+    setAdjNotaId('');
+    setAdjNote('');
+    setAdjKind('anticipo');
+  }, [selectedCustomerForDetails?.id]);
 
   useEffect(() => {
     if (isOpen) {
       const loaded = loadCustomers();
-      const samplePurchases = generateSamplePurchases();
       setCustomers(loaded);
-      setPurchases(samplePurchases);
       setFilteredCustomers(loaded);
       setMcpBanner(null);
       if (isShopIdConfigured() && isBatchDue('localCustomers')) {
         void syncMcpBatch('localCustomers', { force: true });
       }
-      if (canSyncCustomersToMcp()) {
-        void pullCustomersFromMcp().then((r) => {
-          if (r.ok) {
-            const after = loadCustomers();
-            setCustomers(after);
-            setFilteredCustomers(after);
-          }
-        });
-      }
+      // No pull automático al abrir: evita ráfagas MCP/mirror y la sensación de "recarga".
+      // Sincronización con la nube solo con el botón de actualizar.
     }
   }, [isOpen]);
 
@@ -296,10 +325,6 @@ const CustomerManagement = ({ isOpen, onClose }: CustomerManagementProps) => {
       platinum: 'Platino'
     };
     return names[level] || level;
-  };
-
-  const getCustomerPurchases = (customerId: number) => {
-    return purchases.filter(p => p.customerId === customerId);
   };
 
   const renderCustomerForm = () => (
@@ -493,8 +518,8 @@ const CustomerManagement = ({ isOpen, onClose }: CustomerManagementProps) => {
           </tr>
         </thead>
         <tbody>
-          {filteredCustomers.map(customer => {
-            const customerPurchases = getCustomerPurchases(customer.id);
+          {filteredCustomers.map((customer) => {
+            const pos = getMergedPosDisplay(customer, merklePosByCustomerId.get(customer.id));
             return (
               <tr key={customer.id}>
                 <td>
@@ -530,20 +555,19 @@ const CustomerManagement = ({ isOpen, onClose }: CustomerManagementProps) => {
                 </td>
                 <td>
                   <div className="purchase-info">
-                    <span className="purchase-count">{customer.totalOrders} órdenes</span>
-                    <span className="purchase-items">{customerPurchases.length} transacciones</span>
+                    <span className="purchase-count">{pos.orders} órdenes (POS)</span>
                   </div>
                 </td>
                 <td>
-                  <span className="total-spent">${customer.totalSpent.toFixed(2)}</span>
+                  <span className="total-spent">${pos.spent.toFixed(2)}</span>
                 </td>
                 <td>
                   <span className="last-purchase">
-                    {customer.lastPurchase ? new Date(customer.lastPurchase).toLocaleDateString() : 'Nunca'}
+                    {pos.lastPurchaseIso ? new Date(pos.lastPurchaseIso).toLocaleDateString() : 'Nunca'}
                   </span>
                 </td>
                 <td>
-                  <span className="crm-status-label">{getCustomerStatusLabel(customer.customerStatus)}</span>
+                  <span className="crm-status-label">{getCustomerStatusLabel(pos.crmStatus)}</span>
                 </td>
                 <td className="customers-table-actions-cell">
                   <div className="customers-table-actions">
@@ -585,8 +609,8 @@ const CustomerManagement = ({ isOpen, onClose }: CustomerManagementProps) => {
 
   const renderCustomerGrid = () => (
     <div className="customers-grid">
-      {filteredCustomers.map(customer => {
-        const customerPurchases = getCustomerPurchases(customer.id);
+      {filteredCustomers.map((customer) => {
+        const pos = getMergedPosDisplay(customer, merklePosByCustomerId.get(customer.id));
         return (
           <div key={customer.id} className="customer-card">
             <div className="customer-card-header">
@@ -624,11 +648,11 @@ const CustomerManagement = ({ isOpen, onClose }: CustomerManagementProps) => {
                 </div>
                 <div className="detail-row">
                   <span className="label">Total gastado:</span>
-                  <span className="value total-spent">${customer.totalSpent.toFixed(2)}</span>
+                  <span className="value total-spent">${pos.spent.toFixed(2)}</span>
                 </div>
                 <div className="detail-row">
                   <span className="label">Órdenes:</span>
-                  <span className="value">{customer.totalOrders}</span>
+                  <span className="value">{pos.orders}</span>
                 </div>
               </div>
             </div>
@@ -656,7 +680,11 @@ const CustomerManagement = ({ isOpen, onClose }: CustomerManagementProps) => {
   const renderAnalytics = () => {
     const totalCustomers = customers.length;
     const activeCustomers = customers.filter(c => c.isActive).length;
-    const totalRevenue = customers.reduce((sum, c) => sum + c.totalSpent, 0);
+    const mergedRows = customers.map((c) => ({
+      customer: c,
+      ...getMergedPosDisplay(c, merklePosByCustomerId.get(c.id)),
+    }));
+    const totalRevenue = mergedRows.reduce((sum, r) => sum + r.spent, 0);
     const averageSpent = totalCustomers > 0 ? totalRevenue / totalCustomers : 0;
 
     const membershipStats = customers.reduce((acc, customer) => {
@@ -664,9 +692,7 @@ const CustomerManagement = ({ isOpen, onClose }: CustomerManagementProps) => {
       return acc;
     }, {} as { [key: string]: number });
 
-    const topCustomers = customers
-      .sort((a, b) => b.totalSpent - a.totalSpent)
-      .slice(0, 5);
+    const topCustomers = [...mergedRows].sort((a, b) => b.spent - a.spent).slice(0, 5);
 
     return (
       <div className="analytics-view">
@@ -736,19 +762,24 @@ const CustomerManagement = ({ isOpen, onClose }: CustomerManagementProps) => {
 
           <div className="chart-container">
             <h3>Top 5 Clientes</h3>
+            <p style={{ fontSize: '0.8125rem', color: 'var(--bs-dark-text-muted, #64748b)', margin: '0 0 0.75rem' }}>
+              Ingresos y órdenes = registro del cliente o historial de ventas (Merkle) del POS, el valor mayor de ambos.
+            </p>
             <div className="top-customers">
-              {topCustomers.map((customer, index) => (
-                <div key={customer.id} className="top-customer-item">
+              {topCustomers.map((row, index) => (
+                <div key={row.customer.id} className="top-customer-item">
                   <div className="customer-rank">
                     <span className="rank-number">{index + 1}</span>
                     <div className="customer-info">
-                      <span className="customer-name">{customer.firstName} {customer.lastName}</span>
-                      <span className="customer-level">{getMembershipName(customer.membershipLevel)}</span>
+                      <span className="customer-name">
+                        {row.customer.firstName} {row.customer.lastName}
+                      </span>
+                      <span className="customer-level">{getMembershipName(row.customer.membershipLevel)}</span>
                     </div>
                   </div>
                   <div className="customer-stats">
-                    <span className="total-spent">${customer.totalSpent.toFixed(2)}</span>
-                    <span className="order-count">{customer.totalOrders} órdenes</span>
+                    <span className="total-spent">${row.spent.toFixed(2)}</span>
+                    <span className="order-count">{row.orders} órdenes</span>
                   </div>
                 </div>
               ))}
@@ -762,8 +793,15 @@ const CustomerManagement = ({ isOpen, onClose }: CustomerManagementProps) => {
   const renderCustomerDetails = () => {
     if (!selectedCustomerForDetails) return null;
 
-    const customerPurchases = getCustomerPurchases(selectedCustomerForDetails.id);
-    const recentPurchases = customerPurchases.slice(0, 5);
+    void merkleTick;
+    const detailSummary = merklePosByCustomerId.get(selectedCustomerForDetails.id) ?? {
+      rows: [],
+      totalSpent: 0,
+      orderCount: 0,
+      lastDate: null,
+    };
+    const pos = getMergedPosDisplay(selectedCustomerForDetails, detailSummary);
+    const recentSales = detailSummary.rows.slice(0, 5);
 
     return (
       <div className="customer-details-modal">
@@ -815,25 +853,127 @@ const CustomerManagement = ({ isOpen, onClose }: CustomerManagementProps) => {
 
               <div className="detail-section">
                 <h4>Estadísticas</h4>
+                <p style={{ fontSize: '0.8125rem', color: 'var(--bs-dark-text-muted, #64748b)', margin: '0 0 0.5rem' }}>
+                  Totales combinados con ventas registradas en historial Merkle (POS).
+                </p>
                 <div className="stats-grid">
                   <div className="stat-item">
                     <span className="stat-label">Total Gastado</span>
-                    <span className="stat-value">${selectedCustomerForDetails.totalSpent.toFixed(2)}</span>
+                    <span className="stat-value">${pos.spent.toFixed(2)}</span>
                   </div>
                   <div className="stat-item">
                     <span className="stat-label">Órdenes</span>
-                    <span className="stat-value">{selectedCustomerForDetails.totalOrders}</span>
+                    <span className="stat-value">{pos.orders}</span>
                   </div>
                   <div className="stat-item">
                     <span className="stat-label">Última Compra</span>
                     <span className="stat-value">
-                      {selectedCustomerForDetails.lastPurchase ? new Date(selectedCustomerForDetails.lastPurchase).toLocaleDateString() : 'Nunca'}
+                      {pos.lastPurchaseIso ? new Date(pos.lastPurchaseIso).toLocaleDateString() : 'Nunca'}
                     </span>
                   </div>
                   <div className="stat-item">
                     <span className="stat-label">Cliente desde</span>
                     <span className="stat-value">{new Date(selectedCustomerForDetails.createdAt).toLocaleDateString()}</span>
                   </div>
+                </div>
+              </div>
+
+              <div className="detail-section" key={`ledger-${ledgerTick}`}>
+                <h4>Cuenta corriente</h4>
+                <p style={{ fontSize: '0.875rem', color: '#64748b', marginBottom: '0.5rem' }}>
+                  Saldo adeudado (positivo = debe a la tienda):{' '}
+                  <strong>${getCustomerAccountBalance(selectedCustomerForDetails.id).toFixed(2)}</strong>
+                </p>
+                <p style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.75rem' }}>
+                  Conceptos: <strong>cobranza</strong> (cargo), <strong>anticipo</strong> (abono a cuenta),{' '}
+                  <strong>cobro sobre nota</strong> (abono ligado al ID de nota).
+                </p>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxWidth: '420px' }}>
+                  <label className="customer-form-label">Concepto</label>
+                  <select
+                    className="customer-form-input"
+                    value={adjKind}
+                    onChange={(e) => setAdjKind(e.target.value as CustomerAccountAdjustmentKind)}
+                  >
+                    <option value="cobranza">Cobranza (cargo)</option>
+                    <option value="anticipo">Anticipo (abono)</option>
+                    <option value="cobro_sobre_nota">Cobro sobre nota</option>
+                  </select>
+                  {adjKind === 'cobro_sobre_nota' && (
+                    <>
+                      <label className="customer-form-label">ID de nota</label>
+                      <input
+                        className="customer-form-input"
+                        value={adjNotaId}
+                        onChange={(e) => setAdjNotaId(e.target.value)}
+                        placeholder="Ej. NOTA-123"
+                      />
+                    </>
+                  )}
+                  <label className="customer-form-label">Monto</label>
+                  <input
+                    className="customer-form-input"
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={adjAmount}
+                    onChange={(e) => setAdjAmount(e.target.value)}
+                  />
+                  <label className="customer-form-label">Descripción (opcional)</label>
+                  <input
+                    className="customer-form-input"
+                    value={adjNote}
+                    onChange={(e) => setAdjNote(e.target.value)}
+                  />
+                  <button
+                    type="button"
+                    className="btn-primary"
+                    style={{ alignSelf: 'flex-start', marginTop: '0.25rem' }}
+                    onClick={() => {
+                      const amt = parseFloat(adjAmount);
+                      const r = appendLedgerEntry({
+                        customerId: selectedCustomerForDetails.id,
+                        kind: adjKind,
+                        amount: amt,
+                        notaId: adjKind === 'cobro_sobre_nota' ? adjNotaId : undefined,
+                        note: adjNote || undefined,
+                      });
+                      if (r.ok) {
+                        toast.success('Movimiento registrado');
+                        setAdjAmount('');
+                        setAdjNotaId('');
+                        setAdjNote('');
+                        setLedgerTick((x) => x + 1);
+                      } else if (!r.ok && 'error' in r) {
+                        toast.error(r.error);
+                      }
+                    }}
+                  >
+                    Registrar ajuste
+                  </button>
+                </div>
+                <div className="recent-purchases" style={{ marginTop: '1rem' }}>
+                  {listLedgerForCustomer(selectedCustomerForDetails.id).length === 0 ? (
+                    <p className="no-purchases">Sin movimientos de cuenta</p>
+                  ) : (
+                    listLedgerForCustomer(selectedCustomerForDetails.id)
+                      .slice(0, 20)
+                      .map((row) => (
+                        <div key={row.id} className="purchase-item">
+                          <div className="purchase-info">
+                            <span className="purchase-date">{new Date(row.createdAt).toLocaleString()}</span>
+                            <span className="purchase-items">
+                              {row.kind}
+                              {row.notaId ? ` · nota ${row.notaId}` : ''}
+                              {row.note ? ` · ${row.note}` : ''}
+                            </span>
+                          </div>
+                          <div className="purchase-amount">
+                            <span className="amount">${row.amount.toFixed(2)}</span>
+                          </div>
+                        </div>
+                      ))
+                  )}
                 </div>
               </div>
 
@@ -845,23 +985,28 @@ const CustomerManagement = ({ isOpen, onClose }: CustomerManagementProps) => {
               )}
 
               <div className="detail-section">
-                <h4>Compras Recientes</h4>
+                <h4>Compras recientes (POS)</h4>
+                <p style={{ fontSize: '0.8125rem', color: 'var(--bs-dark-text-muted, #64748b)', marginBottom: '0.5rem' }}>
+                  Ventas registradas en historial Merkle al cobrar con este cliente vinculado (o mismo nombre en ventas anteriores sin ID).
+                </p>
                 <div className="recent-purchases">
-                  {recentPurchases.length > 0 ? (
-                    recentPurchases.map(purchase => (
-                      <div key={purchase.id} className="purchase-item">
+                  {recentSales.length > 0 ? (
+                    recentSales.map((row) => (
+                      <div key={row.transactionId} className="purchase-item">
                         <div className="purchase-info">
-                          <span className="purchase-date">{new Date(purchase.date).toLocaleDateString()}</span>
-                          <span className="purchase-items">{purchase.items} artículos</span>
+                          <span className="purchase-date">{new Date(row.date).toLocaleString()}</span>
+                          <span className="purchase-items">
+                            {row.itemCount} artículo{row.itemCount === 1 ? '' : 's'} · {row.saleId}
+                          </span>
                         </div>
                         <div className="purchase-amount">
-                          <span className="amount">${purchase.total.toFixed(2)}</span>
-                          <span className="payment-method">{purchase.paymentMethod}</span>
+                          <span className="amount">${row.total.toFixed(2)}</span>
+                          <span className="payment-method">{formatPaymentMethodLabel(row.paymentMethod)}</span>
                         </div>
                       </div>
                     ))
                   ) : (
-                    <p className="no-purchases">No hay compras registradas</p>
+                    <p className="no-purchases">No hay ventas en historial para este cliente. Vincula el cliente al carrito y cobra para registrarlas aquí.</p>
                   )}
                 </div>
               </div>

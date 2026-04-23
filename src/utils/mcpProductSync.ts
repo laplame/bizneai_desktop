@@ -7,6 +7,7 @@ import {
   getProductsFromMcp,
   mapMcpProductToLocal,
   mergeProductsFromServerPreserveImages,
+  applyMcpInventoryStatusToMergedCatalog,
 } from './shopIdHelper';
 import { syncProductImagesToLocalDisk } from '../services/productImageLocalCache';
 
@@ -26,7 +27,8 @@ export async function pullProductsFromMcpToLocalStorage(): Promise<number> {
   }
   const mappedProducts = mcpProducts.map((p: unknown, index: number) => mapMcpProductToLocal(p, index));
   const merged = mergeProductsFromServerPreserveImages(savedParsed, mappedProducts);
-  const withLocalImages = await syncProductImagesToLocalDisk(merged);
+  const mergedWithInv = await applyMcpInventoryStatusToMergedCatalog(merged);
+  const withLocalImages = await syncProductImagesToLocalDisk(mergedWithInv);
   localStorage.setItem('bizneai-products', JSON.stringify(withLocalImages));
   window.dispatchEvent(new Event('products-updated'));
   return withLocalImages.length;

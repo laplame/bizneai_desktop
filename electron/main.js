@@ -644,6 +644,38 @@ app.whenReady().then(async () => {
   });
 
   /** Vista previa HTML: imagen como data URL (evita bloqueos de file:// en ventanas auxiliares). */
+  /**
+   * Respaldo CSV de inventario: `userData/.Backup/YYYY-MM-DD/` (punto = carpeta oculta en macOS/Linux).
+   * - kind `daily`: un archivo `inventario.csv` por carpeta del día.
+   * - kind `export`: copia adicional `inventario-export-HHmmss.csv` al exportar manualmente.
+   */
+  ipcMain.handle('write-inventory-backup-csv', async (_e, { csvText, kind = 'daily' }) => {
+    try {
+      if (typeof csvText !== 'string' || !csvText.length) {
+        return { ok: false, error: 'empty_csv' };
+      }
+      const now = new Date();
+      const y = now.getFullYear();
+      const mo = String(now.getMonth() + 1).padStart(2, '0');
+      const da = String(now.getDate()).padStart(2, '0');
+      const dateFolder = `${y}-${mo}-${da}`;
+      const backupRoot = path.join(app.getPath('userData'), '.Backup', dateFolder);
+      fs.mkdirSync(backupRoot, { recursive: true });
+      let fileName = 'inventario.csv';
+      if (kind === 'export') {
+        const hh = String(now.getHours()).padStart(2, '0');
+        const mm = String(now.getMinutes()).padStart(2, '0');
+        const ss = String(now.getSeconds()).padStart(2, '0');
+        fileName = `inventario-export-${hh}${mm}${ss}.csv`;
+      }
+      const fp = path.join(backupRoot, fileName);
+      fs.writeFileSync(fp, '\uFEFF' + csvText, 'utf8');
+      return { ok: true, path: fp };
+    } catch (e) {
+      return { ok: false, error: e?.message || String(e) };
+    }
+  });
+
   ipcMain.handle('ticket-logo-data-url', (_e, absPath) => {
     try {
       if (!absPath || typeof absPath !== 'string') return '';

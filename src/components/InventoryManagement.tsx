@@ -28,14 +28,28 @@ import {
   Edit,
   Trash2,
   Eye,
-  ArrowUpDown
+  ArrowUpDown,
+  CloudDownload,
+  Send,
+  ListChecks,
+  WifiOff,
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { shouldShowImage, markImageFailed } from '../utils/imageCache';
 import { scheduleMirrorKeyToSqlite } from '../services/posPersistService';
+import {
+  buildInventoryCsv,
+  maybeRunDailyInventoryCsvBackup,
+  writeInventoryCsvToBackupFolder,
+  todayLocalIsoDate,
+  type InventoryCsvRowInput,
+} from '../services/inventoryCsvBackup';
+import { isElectron } from '../services/receiptPrintService';
+import { isShopIdConfigured, fetchMcpInventoryStatusStockRows } from '../utils/shopIdHelper';
+import { flushPendingSales, getPendingSalesCount } from '../services/pendingSalesSync';
 
 interface Product {
-  id: number;
+  id: number | string;
   name: string;
   description: string;
   price: number;
@@ -58,7 +72,7 @@ interface Product {
 
 interface InventoryMovement {
   id: number;
-  productId: number;
+  productId: number | string;
   productName: string;
   quantity: number;
   operationType: 'add' | 'remove' | 'adjust' | 'sale';
@@ -73,18 +87,26 @@ interface InventoryMovement {
 
 interface InventoryManagementProps {
   products: Product[];
-  onStockUpdate: (productId: number, newStock: number) => void;
-  restockProduct?: { id: number; name: string };
+  onStockUpdate: (productId: number | string, newStock: number) => void;
+  restockProduct?: { id: number | string; name: string };
   onRestockComplete?: (productToAdd?: Product) => void;
+  /** Descarga catálogo MCP + fusiona inventario `inventory/status` (misma acción que la nube en Productos). */
+  onPullServerCatalog?: () => Promise<void>;
 }
 
 type StockStatus = 'in-stock' | 'low-stock' | 'out-of-stock';
 type SortField = 'name' | 'stock' | 'lastUpdated' | 'category';
 type SortDirection = 'asc' | 'desc';
 
-const InventoryManagement: React.FC<InventoryManagementProps> = ({ products, onStockUpdate, restockProduct, onRestockComplete }) => {
+const InventoryManagement: React.FC<InventoryManagementProps> = ({
+  products,
+  onStockUpdate,
+  restockProduct,
+  onRestockComplete,
+  onPullServerCatalog,
+}) => {
   // State
-  const [selectedProducts, setSelectedProducts] = useState<Set<number>>(new Set());
+  const [selectedProducts, setSelectedProducts] = useState<Set<number | string>>(new Set());
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<StockStatus | 'all'>('all');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
@@ -104,6 +126,20 @@ const InventoryManagement: React.FC<InventoryManagementProps> = ({ products, onS
   const [minStock, setMinStock] = useState<number>(0);
   const [maxStock, setMaxStock] = useState<number>(0);
   const [viewMode, setViewMode] = useState<'table' | 'cards'>('table');
+  const [syncAction, setSyncAction] = useState<'pull' | 'sales' | 'verify' | null>(null);
+  const [pendingSalesCount, setPendingSalesCount] = useState(() => getPendingSalesCount());
+  const [showVerifyModal, setShowVerifyModal] = useState(false);
+  const [verifyRows, setVerifyRows] = useState<
+    Array<{ name: string; id: string; local: number; online: number }>
+  >([]);
+  const [verifySummary, setVerifySummary] = useState({ compared: 0, ok: 0, missingInFeed: 0 });
+
+  useEffect(() => {
+    const onQueue = () => setPendingSalesCount(getPendingSalesCount());
+    onQueue();
+    window.addEventListener('pending-sales-queue-changed', onQueue);
+    return () => window.removeEventListener('pending-sales-queue-changed', onQueue);
+  }, []);
 
   // Load inventory history from localStorage
   useEffect(() => {
@@ -143,6 +179,31 @@ const InventoryManagement: React.FC<InventoryManagementProps> = ({ products, onS
     if (product.stock <= product.minStock) return 'low-stock';
     return 'in-stock';
   };
+
+  const mapProductsToCsvRows = (list: Product[]): InventoryCsvRowInput[] =>
+    list.map((p) => ({
+      name: p.name,
+      category: p.category,
+      stock: p.stock,
+      minStock: p.minStock,
+      maxStock: p.maxStock,
+      sku: p.sku,
+      updatedAt: p.updatedAt,
+      stockStatusLabel:
+        getStockStatus(p) === 'in-stock'
+          ? 'En Stock'
+          : getStockStatus(p) === 'low-stock'
+            ? 'Stock Bajo'
+            : 'Sin Stock',
+    }));
+
+  /** Respaldo CSV diario (Electron → `userData/.Backup/AAAA-MM-DD/inventario.csv`). */
+  useEffect(() => {
+    if (products.length === 0) return;
+    void maybeRunDailyInventoryCsvBackup(mapProductsToCsvRows(products));
+    // Solo depende del catálogo; la fecha del último auto se guarda en localStorage.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mapProductsToCsvRows depende de getStockStatus estable por producto
+  }, [products]);
 
   // Filter and sort products
   const filteredAndSortedProducts = useMemo(() => {
@@ -344,7 +405,7 @@ const InventoryManagement: React.FC<InventoryManagementProps> = ({ products, onS
   };
 
   // Toggle product selection
-  const toggleProductSelection = (productId: number) => {
+  const toggleProductSelection = (productId: number | string) => {
     const newSelected = new Set(selectedProducts);
     if (newSelected.has(productId)) {
       newSelected.delete(productId);
@@ -363,39 +424,156 @@ const InventoryManagement: React.FC<InventoryManagementProps> = ({ products, onS
     }
   };
 
-  // Export inventory
+  // Export inventory (descarga + en Electron copia en .Backup/…/inventario-export-HHmmss.csv)
   const handleExportInventory = () => {
-    const data = filteredAndSortedProducts.map(p => ({
-      Nombre: p.name,
-      Categoría: p.category,
-      Stock: p.stock,
-      'Stock Mínimo': p.minStock,
-      'Stock Máximo': p.maxStock,
-      Estado: getStockStatus(p) === 'in-stock' ? 'En Stock' : 
-               getStockStatus(p) === 'low-stock' ? 'Stock Bajo' : 'Sin Stock',
-      SKU: p.sku,
-      'Última Actualización': p.updatedAt
-    }));
-
-    const csv = [
-      Object.keys(data[0]).join(','),
-      ...data.map(row => Object.values(row).join(','))
-    ].join('\n');
-
-    const blob = new Blob([csv], { type: 'text/csv' });
+    if (filteredAndSortedProducts.length === 0) {
+      toast.error('No hay filas para exportar con los filtros actuales.');
+      return;
+    }
+    const csv = buildInventoryCsv(mapProductsToCsvRows(filteredAndSortedProducts));
+    const blob = new Blob(['\uFEFF', csv], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `inventario-${new Date().toISOString().split('T')[0]}.csv`;
+    a.download = `inventario-${todayLocalIsoDate()}.csv`;
     a.click();
     URL.revokeObjectURL(url);
-    toast.success('Inventario exportado exitosamente');
+
+    if (isElectron()) {
+      void writeInventoryCsvToBackupFolder(csv, 'export').then((r) => {
+        if (r.ok) {
+          toast.success('Inventario exportado y copia guardada en .Backup del día (inventario-export-…).');
+        } else {
+          toast.success('Inventario exportado; no se pudo escribir la copia en .Backup');
+        }
+      });
+    } else {
+      toast.success('Inventario exportado exitosamente');
+    }
   };
 
   // Get categories
   const categories = useMemo(() => {
     return Array.from(new Set(products.map(p => p.category))).sort();
   }, [products]);
+
+  const handleVerifyStockVsOnline = async () => {
+    if (!isShopIdConfigured()) {
+      toast.error('Configura la tienda en Ajustes para consultar inventario en línea.');
+      return;
+    }
+    setSyncAction('verify');
+    try {
+      toast.loading('Consultando inventario en línea…', { id: 'inv-verify' });
+      const rows = await fetchMcpInventoryStatusStockRows();
+      if (rows === null) {
+        toast.dismiss('inv-verify');
+        toast.error('No se pudo conectar al servidor (inventario).');
+        return;
+      }
+      if (rows.length === 0) {
+        toast.dismiss('inv-verify');
+        toast('El servidor no devolvió filas de inventario; no se puede contrastar.');
+        return;
+      }
+      const byKey = new Map<string, number>();
+      for (const r of rows) {
+        byKey.set(String(r.productId), r.stock);
+      }
+      const mismatches: Array<{ name: string; id: string; local: number; online: number }> = [];
+      let compared = 0;
+      let ok = 0;
+      let missingInFeed = 0;
+      for (const p of products) {
+        const idStr = String(p.id);
+        const skuStr = String(p.sku ?? '').trim();
+        const online =
+          (idStr ? byKey.get(idStr) : undefined) ?? (skuStr ? byKey.get(skuStr) : undefined);
+        if (online === undefined) {
+          missingInFeed += 1;
+          continue;
+        }
+        compared += 1;
+        const localN = Number(p.stock);
+        const onlineN = Number(online);
+        if (Math.abs(localN - onlineN) > 0.0001) {
+          mismatches.push({ name: p.name, id: idStr, local: localN, online: onlineN });
+        } else {
+          ok += 1;
+        }
+      }
+      setVerifyRows(mismatches);
+      setVerifySummary({ compared, ok, missingInFeed });
+      setShowVerifyModal(true);
+      toast.dismiss('inv-verify');
+      if (mismatches.length === 0) {
+        toast.success(
+          `Stock alineado con en línea (${compared} productos con fila en inventario; ${missingInFeed} sin fila en MCP).`
+        );
+      } else {
+        toast.error(`${mismatches.length} diferencia(s) de stock respecto al servidor. Revisa el detalle.`, {
+          duration: 5000,
+        });
+      }
+    } catch (e) {
+      console.error(e);
+      toast.dismiss('inv-verify');
+      toast.error('Error al verificar inventario.');
+    } finally {
+      setSyncAction(null);
+    }
+  };
+
+  const handlePullOnlineCatalog = async () => {
+    if (!onPullServerCatalog) {
+      toast.error('Acción no disponible: falta enlazar la sincronización desde Productos.');
+      return;
+    }
+    if (!isShopIdConfigured()) {
+      toast.error('Configura la tienda en Ajustes antes de traer el catálogo.');
+      return;
+    }
+    setSyncAction('pull');
+    try {
+      await onPullServerCatalog();
+    } finally {
+      setSyncAction(null);
+    }
+  };
+
+  const handleSendPendingSales = async () => {
+    if (!isShopIdConfigured()) {
+      toast.error('Configura la tienda para enviar ventas al servidor.');
+      return;
+    }
+    if (!navigator.onLine) {
+      toast.error('Sin conexión. Conéctate y vuelve a intentar.');
+      return;
+    }
+    const n0 = getPendingSalesCount();
+    if (n0 === 0) {
+      toast.success('No hay ventas pendientes de envío.');
+      return;
+    }
+    setSyncAction('sales');
+    try {
+      toast.loading(`Enviando ${n0} venta(s) pendiente(s)…`, { id: 'inv-sales' });
+      const synced = await flushPendingSales();
+      toast.dismiss('inv-sales');
+      setPendingSalesCount(getPendingSalesCount());
+      if (synced > 0) {
+        toast.success(`${synced} venta(s) enviada(s). El inventario remoto se actualizará según el servidor.`);
+      } else {
+        toast.error('No se pudo enviar ninguna venta (revisa conexión o errores en consola).');
+      }
+    } catch (e) {
+      console.error(e);
+      toast.dismiss('inv-sales');
+      toast.error('Error al enviar ventas pendientes.');
+    } finally {
+      setSyncAction(null);
+    }
+  };
 
   return (
     <div className="inventory-management">
@@ -439,6 +617,50 @@ const InventoryManagement: React.FC<InventoryManagementProps> = ({ products, onS
             <h3>{stats.totalItems}</h3>
             <p>Total Unidades</p>
           </div>
+        </div>
+      </div>
+
+      {/* Sincronización con servidor: stock en línea, catálogo y ventas pendientes */}
+      <div className="inventory-sync-bar">
+        <div className="inventory-sync-bar-head">
+          <span className="inventory-sync-title">Servidor e inventario</span>
+          {pendingSalesCount > 0 && (
+            <span className="inventory-sync-badge" title="Ventas cobradas en POS pendientes de subir">
+              {pendingSalesCount} venta(s) en cola
+            </span>
+          )}
+        </div>
+        <div className="inventory-sync-actions">
+          <button
+            type="button"
+            className="btn-inventory-sync btn-inventory-sync-secondary"
+            disabled={syncAction !== null}
+            onClick={() => void handleVerifyStockVsOnline()}
+            title="Compara stock local con GET inventory/status del MCP"
+          >
+            <ListChecks size={18} />
+            Verificar stock vs en línea
+          </button>
+          <button
+            type="button"
+            className="btn-inventory-sync btn-inventory-sync-primary"
+            disabled={syncAction !== null}
+            onClick={() => void handlePullOnlineCatalog()}
+            title="Descarga catálogo y aplica stocks del inventario remoto"
+          >
+            <CloudDownload size={18} />
+            {syncAction === 'pull' ? 'Trayendo…' : 'Traer catálogo y stock'}
+          </button>
+          <button
+            type="button"
+            className="btn-inventory-sync btn-inventory-sync-primary"
+            disabled={syncAction !== null || !navigator.onLine}
+            onClick={() => void handleSendPendingSales()}
+            title="Reintenta POST de ventas en cola (actualiza inventario en el servidor)"
+          >
+            {navigator.onLine ? <Send size={18} /> : <WifiOff size={18} />}
+            {syncAction === 'sales' ? 'Enviando…' : 'Enviar ventas pendientes'}
+          </button>
         </div>
       </div>
 
@@ -1036,6 +1258,77 @@ const InventoryManagement: React.FC<InventoryManagementProps> = ({ products, onS
                   </tbody>
                 </table>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: diferencias de stock local vs inventario MCP */}
+      {showVerifyModal && (
+        <div className="modal-overlay" onClick={() => setShowVerifyModal(false)}>
+          <div className="modal-content large" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Verificación: local vs inventario en línea</h3>
+              <button type="button" className="close-btn" onClick={() => setShowVerifyModal(false)}>
+                <X size={20} />
+              </button>
+            </div>
+            <div className="modal-body">
+              <p className="inventory-verify-summary">
+                Comparados en MCP: <strong>{verifySummary.compared}</strong> · Coinciden:{' '}
+                <strong>{verifySummary.ok}</strong> · Productos sin fila en inventario:{' '}
+                <strong>{verifySummary.missingInFeed}</strong>
+              </p>
+              {verifyRows.length === 0 && verifySummary.compared === 0 ? (
+                <p className="empty-state">
+                  Ningún producto local coincide por <strong>id</strong> o <strong>SKU</strong> con las filas del
+                  inventario remoto. Revisa IDs en el panel web o usa &quot;Traer catálogo y stock&quot;.
+                </p>
+              ) : verifyRows.length === 0 ? (
+                <p className="empty-state">No hay diferencias de cantidad entre este equipo y el inventario remoto.</p>
+              ) : (
+                <div className="history-table-container">
+                  <table className="history-table">
+                    <thead>
+                      <tr>
+                        <th>Producto</th>
+                        <th>ID</th>
+                        <th>Stock local</th>
+                        <th>Stock en línea</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {verifyRows.map((r) => (
+                        <tr key={`${r.id}-${r.name}`}>
+                          <td>{r.name}</td>
+                          <td>{r.id}</td>
+                          <td>{r.local}</td>
+                          <td>{r.online}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+            <div className="modal-footer">
+              <button type="button" className="btn-secondary" onClick={() => setShowVerifyModal(false)}>
+                Cerrar
+              </button>
+              {onPullServerCatalog && (
+                <button
+                  type="button"
+                  className="btn-primary"
+                  disabled={syncAction !== null}
+                  onClick={() => {
+                    setShowVerifyModal(false);
+                    void handlePullOnlineCatalog();
+                  }}
+                >
+                  <CloudDownload size={18} />
+                  Traer catálogo y alinear stock
+                </button>
+              )}
             </div>
           </div>
         </div>

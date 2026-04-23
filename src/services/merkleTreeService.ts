@@ -16,6 +16,7 @@ import {
   verifyBlockIntegrity,
   verifyChainIntegrity,
 } from '../utils/merkleTree';
+import { recordLuxaeForMerkleBlock } from './merkleLuxaeService';
 
 const STORAGE_KEYS = {
   TRANSACTIONS: '@BizneAI_merkle_tree',
@@ -51,6 +52,7 @@ export interface SaleRecord {
   items?: Array<{ productId: string; productName: string; quantity: number; unitPrice: number; totalPrice?: number; category?: string }>;
   subtotal?: number;
   tax?: number;
+  discount?: number;
   total?: number;
   paymentMethod?: string;
   paymentStatus?: string;
@@ -59,7 +61,111 @@ export interface SaleRecord {
   createdAt?: string;
   customerName?: string;
   notes?: string;
+  /** Ciclo lista de espera → cobro (opcional). */
+  saleFulfillmentState?: string;
+  /** Cliente del registro local vinculado al carrito al momento de la venta (POS). */
+  customerId?: number;
+  /** Si la venta cerró desde una fila de lista de espera. */
+  originatedFromWaitlist?: boolean;
+  /** `_id` de la entrada de lista de espera (local o remoto) al cargar al carrito. */
+  waitlistEntryId?: string;
   [key: string]: unknown;
+}
+
+/** Fila derivada del Merkle para “Compras recientes” por cliente del registro. */
+export interface RegistryCustomerSaleRow {
+  transactionId: string;
+  saleId: string;
+  date: string;
+  total: number;
+  itemCount: number;
+  paymentMethod: string;
+}
+
+function normRegistryCustomerNameKey(s: string): string {
+  return String(s).trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+/** `customerId` en transacciones puede ser number o string (JSON / API). */
+function parseSaleCustomerId(d: Record<string, unknown>): number | null {
+  const cid = d.customerId;
+  if (cid == null) return null;
+  if (typeof cid === 'number' && Number.isFinite(cid)) return cid;
+  if (typeof cid === 'string' && cid.trim() !== '') {
+    const n = Number(cid);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
+/**
+ * Ventas registradas en Merkle (`recordSaleCreation`) para un cliente:
+ * por `customerId` en el payload, o (ventas antiguas) por coincidencia exacta de nombre completo.
+ */
+export function listMerkleSalesForRegistryCustomer(
+  customerId: number,
+  registryFullName: string
+): RegistryCustomerSaleRow[] {
+  const transactions = loadTransactions();
+  const nameKey = normRegistryCustomerNameKey(registryFullName);
+  const rows: RegistryCustomerSaleRow[] = [];
+
+  for (const tx of transactions) {
+    if (tx.action !== 'create') continue;
+    const d = tx.data as Record<string, unknown>;
+    const txCid = parseSaleCustomerId(d);
+    const matchId = txCid !== null && txCid === customerId;
+    const matchLegacyName =
+      !matchId &&
+      txCid === null &&
+      nameKey.length > 0 &&
+      normRegistryCustomerNameKey(String(d.customerName ?? '')) === nameKey;
+    if (!matchId && !matchLegacyName) continue;
+
+    const items = Array.isArray(d.items) ? (d.items as Array<Record<string, unknown>>) : [];
+    let itemCount = 0;
+    for (const o of items) {
+      const q = typeof o.quantity === 'number' ? o.quantity : Number(o.quantity) || 0;
+      itemCount += q > 0 ? q : 0;
+    }
+    if (itemCount === 0 && items.length > 0) itemCount = items.length;
+
+    const total = typeof d.total === 'number' ? d.total : Number(d.total) || 0;
+    const date = String(d.createdAt ?? d.date ?? tx.timestamp);
+    const paymentMethod = String(d.paymentMethod ?? '—');
+    const saleId = String(d.saleId ?? d.transactionId ?? tx.saleId ?? tx.id);
+    rows.push({
+      transactionId: tx.id,
+      saleId,
+      date,
+      total,
+      itemCount,
+      paymentMethod,
+    });
+  }
+
+  rows.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  return rows;
+}
+
+/** Totales y filas Merkle para cruzar con el registro de clientes (CRM / análisis). */
+export function summarizeMerkleSalesForRegistryCustomer(
+  customerId: number,
+  registryFullName: string
+): {
+  rows: RegistryCustomerSaleRow[];
+  totalSpent: number;
+  orderCount: number;
+  lastDate: string | null;
+} {
+  const rows = listMerkleSalesForRegistryCustomer(customerId, registryFullName);
+  const totalSpent = rows.reduce((s, r) => s + r.total, 0);
+  return {
+    rows,
+    totalSpent,
+    orderCount: rows.length,
+    lastDate: rows.length > 0 ? rows[0].date : null,
+  };
 }
 
 function loadTransactions(): Transaction[] {
@@ -73,6 +179,11 @@ function loadBlocks(): DailyBlock[] {
 function saveData(transactions: Transaction[], blocks: DailyBlock[]): void {
   storage.set(STORAGE_KEYS.TRANSACTIONS, transactions);
   storage.set(STORAGE_KEYS.DAILY_BLOCKS, blocks);
+  try {
+    window.dispatchEvent(new CustomEvent('merkle-blocks-updated'));
+  } catch {
+    /* ignore */
+  }
 }
 
 /** Convierte SaleRecord a Transaction.data (sanitizado) */
@@ -83,6 +194,7 @@ function sanitizeSaleData(sale: SaleRecord): Record<string, unknown> {
     items: sale.items,
     subtotal: sale.subtotal,
     tax: sale.tax,
+    discount: sale.discount,
     total: sale.total,
     paymentMethod: sale.paymentMethod,
     paymentStatus: sale.paymentStatus ?? 'completed',
@@ -90,14 +202,24 @@ function sanitizeSaleData(sale: SaleRecord): Record<string, unknown> {
     date: sale.date ?? sale.createdAt,
     createdAt: sale.createdAt,
     customerName: sale.customerName,
+    customerId: sale.customerId,
     notes: sale.notes,
+    saleFulfillmentState: sale.saleFulfillmentState,
+    originatedFromWaitlist: sale.originatedFromWaitlist === true,
+    waitlistEntryId: sale.waitlistEntryId,
   };
+}
+
+/** Identificadores de la transacción Merkle recién persistida (p. ej. POST /api/mcp/.../sales). */
+export interface RecordSaleCreationMerkleRef {
+  merkleTransactionId: string;
+  merkleTransactionHash: string;
 }
 
 /**
  * Registra creación de venta → transacción con hash
  */
-export async function recordSaleCreation(sale: SaleRecord): Promise<void> {
+export async function recordSaleCreation(sale: SaleRecord): Promise<RecordSaleCreationMerkleRef> {
   const transactions = loadTransactions();
   const blocks = loadBlocks();
 
@@ -117,6 +239,13 @@ export async function recordSaleCreation(sale: SaleRecord): Promise<void> {
   const transaction: Transaction = { ...txData, hash };
   transactions.push(transaction);
   saveData(transactions, blocks);
+  try {
+    window.dispatchEvent(new CustomEvent('merkle-sales-updated'));
+  } catch {
+    /* ignore (SSR / tests) */
+  }
+
+  return { merkleTransactionId: id, merkleTransactionHash: hash };
 }
 
 /**
@@ -214,11 +343,19 @@ export async function generateDailyBlock(date?: string): Promise<DailyBlock | nu
     transactions: blocksWithProofs,
   };
 
-  blocks.push(blockWithProofs);
+  const { settlement } = recordLuxaeForMerkleBlock(blockWithProofs.id, unblocked.length);
+  const blockFinal: DailyBlock = {
+    ...blockWithProofs,
+    luxaeEarned: settlement.earned,
+    luxaeIntensity: settlement.intensity,
+    luxaeRatePerHour: settlement.ratePerHour,
+  };
+
+  blocks.push(blockFinal);
   storage.set(STORAGE_KEYS.LAST_BLOCK_GENERATION, Date.now());
   saveData(transactions, blocks);
 
-  return blockWithProofs;
+  return blockFinal;
 }
 
 /**
@@ -306,5 +443,10 @@ export function markBlockSent(blockId: string): void {
   if (!sent.includes(blockId)) {
     sent.push(blockId);
     storage.set(STORAGE_KEYS.BLOCKS_SENT, sent);
+    try {
+      window.dispatchEvent(new CustomEvent('merkle-blocks-sent-updated'));
+    } catch {
+      /* ignore */
+    }
   }
 }

@@ -63,7 +63,11 @@ import { API_CONFIG, apiRequest, handleApiError } from '../config/api';
 import { StoreConfig } from '../types/store';
 import { useStore } from '../contexts/StoreContext';
 import { getStoreTypes, checkStoreTypesForUpdates, getStoreTypeLabel } from '../data/storeTypes';
-import { mapMcpProductToLocal, mergeProductsFromServerPreserveImages } from '../utils/shopIdHelper';
+import {
+  mapMcpProductToLocal,
+  mergeProductsFromServerPreserveImages,
+  applyMcpInventoryStatusToMergedCatalog,
+} from '../utils/shopIdHelper';
 import { extractMcpMethodsField, getMcpMethodsEndpointCount } from '../utils/mcpMethodsApi';
 import {
   setLastSyncTime,
@@ -512,7 +516,8 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
               mapMcpProductToLocal(product, index)
             );
             const merged = mergeProductsFromServerPreserveImages(savedParsed, mappedProducts);
-            const withLocalImages = await syncProductImagesToLocalDisk(merged);
+            const mergedWithInv = await applyMcpInventoryStatusToMergedCatalog(merged);
+            const withLocalImages = await syncProductImagesToLocalDisk(mergedWithInv);
             localStorage.setItem('bizneai-products', JSON.stringify(withLocalImages));
             setLastSyncTime();
             window.dispatchEvent(new Event('products-updated'));

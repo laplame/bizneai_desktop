@@ -26,6 +26,10 @@ export interface DailyBlock {
   previousBlockHash: string | null;
   blockHash: string;
   createdAt: string;
+  /** Luxae otorgadas al cerrar este bloque (no entran en blockHash). */
+  luxaeEarned?: number;
+  luxaeIntensity?: 'low' | 'high';
+  luxaeRatePerHour?: 1 | 2;
 }
 
 // Simple hash function (SHA-256 simulation)

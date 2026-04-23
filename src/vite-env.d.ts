@@ -22,6 +22,11 @@ interface ElectronAPI {
   pickTicketLogo?: () => Promise<{ path: string | null; error?: string }>;
   removeTicketLogo?: () => Promise<{ ok?: boolean }>;
   ticketLogoDataUrl?: (absPath: string) => Promise<string>;
+  /** Respaldo en `userData/.Backup/AAAA-MM-DD/` (solo Electron). */
+  writeInventoryBackupCsv?: (payload: {
+    csvText: string;
+    kind?: 'daily' | 'export';
+  }) => Promise<{ ok: boolean; path?: string; error?: string }>;
 }
 
 interface ReceiptPrintData {

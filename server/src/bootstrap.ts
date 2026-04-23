@@ -23,6 +23,7 @@ import localActivityRoutes from './routes/localActivityRoutes.js';
 import posKvRoutes from './routes/posKvRoutes.js';
 import posProductImageRoutes from './routes/posProductImageRoutes.js';
 import localDbConsoleRoutes from './routes/localDbConsoleRoutes.js';
+import merkleLedgerRoutes from './routes/merkleLedgerRoutes.js';
 
 import { errorHandler } from './middleware/errorHandler.js';
 import { notFound } from './middleware/notFound.js';
@@ -102,6 +103,7 @@ function buildBizneaiApp(): { app: express.Express; server: HttpServer; io: Serv
   });
 
   app.use('/api/proxy', mcpProxyRoutes);
+  app.use('/api/merkle-ledger', merkleLedgerRoutes);
   app.use('/api/local-activity', localActivityRoutes);
   app.use('/api/pos', posKvRoutes);
   app.use('/api/pos', posProductImageRoutes);

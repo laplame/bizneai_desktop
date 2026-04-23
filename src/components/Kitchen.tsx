@@ -6,7 +6,6 @@ import {
   Hourglass,
   RefreshCw,
   Search,
-  AlertCircle,
   Trash2,
   RotateCcw,
   ShoppingCart,
@@ -78,6 +77,14 @@ const formatElapsedTime = (timestamp: string): string => {
   }
   return `${diffMin} min`;
 };
+
+/** Cocina: solo volumen de líneas (sin nombres de producto); el detalle está en Lista de espera. */
+function kitchenLineSummary(order: KitchenOrder): string {
+  const n = order.items.length;
+  if (n === 0) return 'Sin partidas';
+  if (n === 1) return '1 partida en ticket';
+  return `${n} partidas en ticket`;
+}
 
 const Kitchen: React.FC<KitchenProps> = ({ isOpen, onLoadOrderToCart }) => {
   const { storeIdentifiers } = useStore();
@@ -157,7 +164,7 @@ const Kitchen: React.FC<KitchenProps> = ({ isOpen, onLoadOrderToCart }) => {
             timestamp: entry.timestamp,
             notes: entry.notes,
             specialInstructions: entry.specialInstructions,
-            source: entry.source === 'online' ? 'online' : 'pos'
+            source: entry.source === 'online' ? 'online' : 'waitlist'
           };
           if (!kitchenOrders.find(o => o._id === entry._id)) kitchenOrders.push(ko);
         }
@@ -338,9 +345,14 @@ const Kitchen: React.FC<KitchenProps> = ({ isOpen, onLoadOrderToCart }) => {
   return (
     <div className="kitchen-content-inline kitchen-web-style">
       <div className="kitchen-header-inline">
-        <div className="kitchen-title">
-          <ChefHat size={24} />
-          <h2>Cocina</h2>
+        <div className="kitchen-title-block">
+          <div className="kitchen-title">
+            <ChefHat size={24} />
+            <h2>Cocina</h2>
+          </div>
+          <p className="kitchen-view-hint">
+            Vista rápida: estado del pedido y tiempo transcurrido. El detalle de ítems y cobro está en Lista de espera.
+          </p>
         </div>
         <div className="header-actions">
           <button className="action-btn" onClick={() => loadKitchenOrders()} title="Actualizar" disabled={isLoading}>
@@ -370,7 +382,7 @@ const Kitchen: React.FC<KitchenProps> = ({ isOpen, onLoadOrderToCart }) => {
             <Search size={18} />
             <input
               type="text"
-              placeholder="Buscar por cliente, mesa o camarero..."
+              placeholder="Buscar por cliente, mesa, ticket… (el detalle de ítems está en Lista de espera)"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
             />
@@ -422,27 +434,25 @@ const Kitchen: React.FC<KitchenProps> = ({ isOpen, onLoadOrderToCart }) => {
                     </span>
                   </div>
 
-                  <h3 className="kitchen-card-mesa">Mesa {order.tableNumber || 'N/A'}</h3>
-                  <p className="kitchen-card-meta">Mesa {order.tableNumber || 'N/A'} • {order.waiterName || order.customerName || 'N/A'}</p>
+                  <h3 className="kitchen-card-mesa">{order.customerName || 'Cliente'}</h3>
+                  <p className="kitchen-card-meta">
+                    {order.tableNumber ? `Mesa ${order.tableNumber}` : 'Sin mesa'}
+                    {order.waiterName ? ` · ${order.waiterName}` : ''}
+                    {order.source === 'waitlist' ? ' · Lista de espera' : ''}
+                  </p>
 
-                  <div className="kitchen-card-time">
-                    <span>{new Date(order.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
-                    <span className="elapsed-pill">{formatElapsedTime(order.timestamp)}</span>
+                  <div className="kitchen-card-time kitchen-card-time--hero">
+                    <span className="kitchen-elapsed-main" title="Tiempo desde que entró a cocina">
+                      {formatElapsedTime(order.timestamp)}
+                    </span>
+                    <span className="kitchen-time-sub">
+                      {new Date(order.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                    </span>
                   </div>
 
-                  <div className="kitchen-card-items">
-                    <strong>Items:</strong>
-                    <div className="items-pills">
-                      {order.items.map((item, idx) => (
-                        <span key={idx} className="item-pill">
-                          {item.product.isWeightBased ? `${item.weight?.toFixed(2)} kg` : `${item.quantity}x`} {item.product.name}
-                          {item.notes && <span title={item.notes}><AlertCircle size={12} /></span>}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
+                  <p className="kitchen-card-volume">{kitchenLineSummary(order)}</p>
 
-                  <p className="kitchen-card-order-id">Orden #{order.orderId || order._id?.slice(-12)}</p>
+                  <p className="kitchen-card-order-id">#{order.orderId || order._id?.slice(-12)}</p>
 
                   <div className="kitchen-card-actions">
                     {onLoadOrderToCart && (

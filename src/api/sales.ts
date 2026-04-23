@@ -14,7 +14,7 @@ const getApiOrigin = (): string => {
   return 'https://www.bizneai.com';
 };
 
-export type PaymentMethod = 'cash' | 'card' | 'crypto' | 'mobile' | 'other';
+export type PaymentMethod = 'cash' | 'card' | 'crypto' | 'mobile' | 'other' | 'transfer';
 export type OrderType = 'dine-in' | 'takeaway' | 'delivery';
 export type Source = 'local' | 'online' | 'phone';
 
@@ -28,7 +28,18 @@ export interface ShopTransactionItem {
   category: string;
 }
 
-/** Payload ShopTransaction para POST /api/:shopId/sales */
+/** Campos Merkle opcionales en POST /api/mcp/:shopId/sales (MCPSaleSchema). */
+export interface SaleMerklePayload {
+  merkleTransactionId: string;
+  merkleTransactionHash: string;
+  /** Vacío hasta cerrar bloque; el servidor persiste `[]` si se envía. */
+  merkleProof?: string[];
+  blockId?: string | null;
+  blockHash?: string | null;
+  merkleRoot?: string | null;
+}
+
+/** Payload ShopTransaction para POST /api/:shopId/sales o MCP con extensión Merkle */
 export interface ShopTransactionPayload {
   clientEventId: string;
   clientTimestampUnixMs?: number;
@@ -48,6 +59,12 @@ export interface ShopTransactionPayload {
   tableNumber?: string;
   waiterName?: string;
   notes?: string;
+  merkleTransactionId?: string;
+  merkleTransactionHash?: string;
+  merkleProof?: string[];
+  blockId?: string | null;
+  blockHash?: string | null;
+  merkleRoot?: string | null;
 }
 
 export interface ShopTransactionResponse {
@@ -64,9 +81,45 @@ export interface ApiResponse<T> {
   error?: string;
 }
 
+export type CreateSaleResult = ApiResponse<ShopTransactionResponse> & {
+  /** Si true, conviene reintentar (red, 5xx, timeout). Si false, corregir datos o descartar. */
+  retriable?: boolean;
+  httpStatus?: number;
+};
+
+export interface CreateSaleOptions {
+  /** Tienda con la que se registró la venta (cola offline); por defecto `getShopId()`. */
+  shopId?: string;
+}
+
+function safeJsonStringify(value: unknown, maxLen: number = 8000): string {
+  try {
+    const seen = new WeakSet<object>();
+    const json = JSON.stringify(
+      value,
+      (k, v) => {
+        if (v && typeof v === 'object') {
+          if (seen.has(v as object)) return '[Circular]';
+          seen.add(v as object);
+        }
+        if (k === 'customerEmail' && typeof v === 'string' && v) return '[redacted-email]';
+        if (k === 'customerPhone' && typeof v === 'string' && v) return '[redacted-phone]';
+        return v;
+      },
+      2
+    );
+    if (json.length <= maxLen) return json;
+    return `${json.slice(0, maxLen)}\n…[truncated ${json.length - maxLen} chars]`;
+  } catch {
+    return '[unserializable]';
+  }
+}
+
 const normalizePaymentMethod = (method: string): PaymentMethod => {
   const m = (method || 'cash').toLowerCase();
-  if (['cash', 'card', 'crypto', 'mobile', 'other'].includes(m)) return m as PaymentMethod;
+  /** Venta a crédito: la API remota suele aceptar `other`; el POS guarda el matiz en notas. */
+  if (m === 'credit') return 'other';
+  if (['cash', 'card', 'crypto', 'mobile', 'other', 'transfer'].includes(m)) return m as PaymentMethod;
   return 'other';
 };
 
@@ -107,26 +160,62 @@ export interface CreateSaleInput {
   orderType?: OrderType;
   source?: Source;
   notes?: string;
+  /** Si viene con id+hash, se usa POST /api/mcp/:shopId/sales con campos Merkle. */
+  saleMerkle?: SaleMerklePayload;
+  /** Mismo id en reintentos / cola offline para idempotencia en servidor. */
+  clientEventId?: string;
+}
+
+function isRetriableHttpStatus(status: number): boolean {
+  if (status === 408 || status === 429) return true;
+  return status >= 500;
+}
+
+async function parseJsonResponse(response: Response): Promise<Record<string, unknown>> {
+  try {
+    const text = await response.text();
+    if (!text.trim()) return {};
+    const parsed = JSON.parse(text) as unknown;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function stripMerkleFields(p: ShopTransactionPayload): ShopTransactionPayload {
+  const {
+    merkleTransactionId: _a,
+    merkleTransactionHash: _b,
+    merkleProof: _c,
+    blockId: _d,
+    blockHash: _e,
+    merkleRoot: _f,
+    ...rest
+  } = p;
+  return rest as ShopTransactionPayload;
 }
 
 /**
- * Crea una venta en la Sales API principal.
- * POST /api/:shopId/sales
- * - source por defecto: 'local'
- * - totalPrice obligatorio en cada ítem
- * - clientEventId para idempotencia
+ * Crea una venta: Sales API principal (`POST /api/:shopId/sales`) o, si `saleMerkle`
+ * trae id+hash de transacción Merkle, `POST /api/mcp/:shopId/sales` con campos Merkle.
+ * Si MCP falla, reintenta la Sales API sin campos Merkle.
  */
-export const createSale = async (payload: CreateSaleInput): Promise<ApiResponse<ShopTransactionResponse>> => {
-  const shopId = getShopId();
+export const createSale = async (
+  payload: CreateSaleInput,
+  options?: CreateSaleOptions
+): Promise<CreateSaleResult> => {
+  const shopId = options?.shopId?.trim() || getShopId();
   if (!shopId) {
-    return { success: false, error: 'Shop ID no configurado' };
+    return { success: false, error: 'Shop ID no configurado', retriable: false };
   }
 
   if (!payload.items?.length) {
-    return { success: false, error: 'Items array is required and must not be empty' };
+    return { success: false, error: 'Items array is required and must not be empty', retriable: false };
   }
 
-  const clientEventId = generateClientEventId();
+  const clientEventId = payload.clientEventId?.trim() || generateClientEventId();
   const clientTimestampUnixMs = Date.now();
 
   // Normalizar items: obligatorios productId, productName, quantity, unitPrice, totalPrice, category
@@ -161,6 +250,7 @@ export const createSale = async (payload: CreateSaleInput): Promise<ApiResponse<
     return {
       success: false,
       error: 'Items are missing required fields (productId, productName, quantity, unitPrice, totalPrice, category)',
+      retriable: false,
     };
   }
 
@@ -185,48 +275,99 @@ export const createSale = async (payload: CreateSaleInput): Promise<ApiResponse<
     customerEmail: payload.customerEmail || undefined,
   };
 
-  const url = shouldUseSalesMcpProxy()
+  const saleMerkle = payload.saleMerkle;
+  const useMcpSales = Boolean(
+    saleMerkle?.merkleTransactionId &&
+    saleMerkle?.merkleTransactionHash
+  );
+  if (useMcpSales && saleMerkle) {
+    apiPayload.merkleTransactionId = saleMerkle.merkleTransactionId;
+    apiPayload.merkleTransactionHash = saleMerkle.merkleTransactionHash;
+    apiPayload.merkleProof = saleMerkle.merkleProof ?? [];
+    if (saleMerkle.blockId !== undefined) apiPayload.blockId = saleMerkle.blockId;
+    if (saleMerkle.blockHash !== undefined) apiPayload.blockHash = saleMerkle.blockHash;
+    if (saleMerkle.merkleRoot !== undefined) apiPayload.merkleRoot = saleMerkle.merkleRoot;
+  }
+
+  const legacyUrl = shouldUseSalesMcpProxy()
     ? `${getLocalApiOrigin()}/api/proxy/sales/${shopId}`
     : `${getApiOrigin()}/api/${shopId}/sales`;
+  const mcpSalesUrl = shouldUseSalesMcpProxy()
+    ? `${getLocalApiOrigin()}/api/proxy/mcp/${shopId}/sales`
+    : `${getApiOrigin()}/api/mcp/${shopId}/sales`;
 
-  console.log('[SALE] POST Sales API iniciando:', { url, shopId, total: apiPayload.total, itemsCount: apiPayload.items.length, clientEventId });
+  let url = useMcpSales ? mcpSalesUrl : legacyUrl;
+  let body: ShopTransactionPayload = apiPayload;
+
+  // En Electron, algunos logs de objetos salen como "[object Object]".
+  // Loguear como string garantiza que el JSON aparezca completo.
+  console.log(
+    `[SALE] POST venta iniciando ${safeJsonStringify({
+      url,
+      shopId,
+      total: apiPayload.total,
+      itemsCount: apiPayload.items.length,
+      clientEventId,
+      clientTimestampUnixMs,
+      mcpMerkle: useMcpSales,
+      body,
+    })}`
+  );
 
   try {
-    const response = await fetch(url, {
+    let response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify(apiPayload),
+      body: JSON.stringify(body),
     });
 
-    const result = await response.json();
+    if (!response.ok && useMcpSales) {
+      console.warn('[SALE] MCP sales falló, reintentando Sales API sin Merkle:', response.status);
+      body = stripMerkleFields(apiPayload);
+      url = legacyUrl;
+      console.log(`[SALE] Reintento Sales API (sin Merkle) ${safeJsonStringify({ url, body })}`);
+      response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify(body),
+      });
+    }
+
+    const result = await parseJsonResponse(response);
 
     console.log('[SALE] POST Sales API respuesta:', { status: response.status, ok: response.ok, hasData: !!result?.data });
 
     if (!response.ok) {
-      const errMsg = result?.error || result?.message || result?.details || `Error ${response.status}`;
+      const rawMsg = result.error ?? result.message ?? result.details ?? `Error ${response.status}`;
+      const errMsg = typeof rawMsg === 'string' ? rawMsg : JSON.stringify(rawMsg);
       console.warn('[SALE] POST Sales API falló:', { status: response.status, error: errMsg });
       return {
         success: false,
-        error: typeof errMsg === 'string' ? errMsg : JSON.stringify(errMsg),
+        error: errMsg,
+        httpStatus: response.status,
+        retriable: isRetriableHttpStatus(response.status),
       };
     }
 
     if (response.status === 200 || response.status === 201) {
+      const data = result.data as Record<string, unknown> | undefined;
       console.log('[SALE] POST Sales API 200/201 OK - venta sincronizada:', {
-        transactionId: result?.data?.transactionId ?? result?.transactionId,
-        receiptNumber: result?.data?.receiptNumber ?? result?.receiptNumber,
+        transactionId: data?.transactionId ?? result.transactionId,
+        receiptNumber: data?.receiptNumber ?? result.receiptNumber,
       });
     }
 
     return {
       success: true,
-      data: result?.data ?? result,
+      data: (result.data ?? result) as unknown as ShopTransactionResponse,
+      httpStatus: response.status,
     };
   } catch (err) {
     console.error('[SALE] POST Sales API error de conexión:', err);
     return {
       success: false,
       error: err instanceof Error ? err.message : 'Error de conexión',
+      retriable: true,
     };
   }
 };

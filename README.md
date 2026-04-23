@@ -157,7 +157,11 @@ npm run preview   # vista previa del build estático
 npm run dist:mac     # macOS (DMG / ZIP)
 npm run dist:win     # Windows (NSIS / portable + API .exe solo en Windows); en Mac/Linux el .exe del API se omite; el build del front puede fallar por nativos → usar CI
 npm run dist:linux   # Linux (AppImage / deb)
+
+npm run pack:local-api  #generar backend
 ```
+
+
 
 ### Windows: instalar ambos — Win Setup y servidor de base de datos (API local)
 
@@ -167,6 +171,8 @@ En un PC de tienda con **Windows** intervienen **dos componentes**, que instalas
 |--------|---------|------------------------|
 | **Servidor BD** (API local) | Escucha en `http://127.0.0.1:3000` y persiste en **SQLite** (POS KV, actividad, etc.). Sin él no hay persistencia local completa. | `BizneAI-Local-API-Backend.exe`, o la carpeta portable generada con `npm run pack:local-api` (ver [standalone-local-api/LEEME.txt](standalone-local-api/LEEME.txt)). |
 | **Win Setup** (front) | Instalador **NSIS** de la aplicación **Electron** (interfaz del POS). | `BizneAI-POS-Front-<versión>-Setup.exe` (o el `.exe` portable equivalente). |
+
+
 
 **Orden recomendado:** primero el **servidor BD** (en ejecución y con [http://127.0.0.1:3000/health](http://127.0.0.1:3000/health) respondiendo bien), después el **Win Setup** del POS. Si el puerto 3000 ya está ocupado por el API, el POS **no** levanta un segundo servidor: reutiliza el existente.
 

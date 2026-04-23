@@ -9,6 +9,10 @@ import type { RegistryCommercialConditions, RegistryCustomer } from '../types/cu
 import { computeCustomerStatus, loadCustomers, saveCustomers } from './customerRegistry';
 import { MCP_SNAPSHOT, mirrorMcpPayloadToLocalSql } from './mcpSnapshotMirror';
 
+type PullCustomersResult = { ok: boolean; error?: string; count?: number };
+
+let pullCustomersInFlight: Promise<PullCustomersResult> | null = null;
+
 export function isProvisionalOrLocalShopId(shopId: string | null): boolean {
   if (!shopId) return true;
   if (shopId === 'local-unconfigured') return true;
@@ -184,36 +188,46 @@ function generateMcpLogicalId(): string {
   }
 }
 
-export async function pullCustomersFromMcp(): Promise<{ ok: boolean; error?: string; count?: number }> {
+export async function pullCustomersFromMcp(): Promise<PullCustomersResult> {
   if (!canSyncCustomersToMcp()) {
     return { ok: true, count: 0 };
   }
+  if (pullCustomersInFlight) {
+    return pullCustomersInFlight;
+  }
   const shopId = getShopId()!;
   const url = customersUrl(shopId);
-  try {
-    const res = await fetch(url, { headers: { Accept: 'application/json' } });
-    if (!res.ok) {
-      return { ok: false, error: `HTTP ${res.status}` };
-    }
-    const data: unknown = await res.json();
+  pullCustomersInFlight = (async (): Promise<PullCustomersResult> => {
     try {
-      const q = url.includes('?') ? url.slice(url.indexOf('?') + 1) : '';
-      void mirrorMcpPayloadToLocalSql({
-        shopId,
-        resourcePath: MCP_SNAPSHOT.customers,
-        queryKey: q,
-        payload: data,
-      });
-    } catch {
-      /* ignore mirror errors */
+      const res = await fetch(url, { headers: { Accept: 'application/json' } });
+      if (!res.ok) {
+        return { ok: false, error: `HTTP ${res.status}` };
+      }
+      const data: unknown = await res.json();
+      try {
+        const q = url.includes('?') ? url.slice(url.indexOf('?') + 1) : '';
+        void mirrorMcpPayloadToLocalSql({
+          shopId,
+          resourcePath: MCP_SNAPSHOT.customers,
+          queryKey: q,
+          payload: data,
+        });
+      } catch {
+        /* ignore mirror errors */
+      }
+      const rows = parseCustomersPayload(data);
+      const local = loadCustomers();
+      const merged = mergeRemoteCustomersIntoLocal(local, rows);
+      saveCustomers(merged);
+      return { ok: true, count: rows.length };
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
     }
-    const rows = parseCustomersPayload(data);
-    const local = loadCustomers();
-    const merged = mergeRemoteCustomersIntoLocal(local, rows);
-    saveCustomers(merged);
-    return { ok: true, count: rows.length };
-  } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  })();
+  try {
+    return await pullCustomersInFlight;
+  } finally {
+    pullCustomersInFlight = null;
   }
 }
 

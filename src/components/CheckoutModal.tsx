@@ -1,24 +1,34 @@
 import { useState, useEffect, useRef } from 'react';
-import { 
-  CreditCard, 
-  DollarSign, 
+import { toast } from 'react-hot-toast';
+import {
+  CreditCard,
+  DollarSign,
   Bitcoin,
-  QrCode, 
+  QrCode,
   CheckCircle,
   X,
   Receipt,
   Link as LinkIcon,
-  Percent
+  Wallet,
 } from 'lucide-react';
+
+export interface CheckoutDeferPaymentProps {
+  show: boolean;
+  canComplete: boolean;
+  subtitle: string;
+  disabledMessage: string;
+}
 
 interface CheckoutModalProps {
   isOpen: boolean;
   onClose: () => void;
   total: number;
   onComplete: (paymentMethod: string, amount: number, change?: number) => void;
+  /** Diferir pago / historial de crédito cuando el carrito tiene cliente del registro. */
+  deferPayment?: CheckoutDeferPaymentProps;
 }
 
-type PaymentMethod = 'cash' | 'card' | 'crypto' | 'codi' | 'mixed';
+type PaymentMethod = 'cash' | 'card' | 'crypto' | 'codi' | 'mixed' | 'credit';
 
 interface PaymentMethodOption {
   id: PaymentMethod;
@@ -66,7 +76,20 @@ const paymentMethods: PaymentMethodOption[] = [
   }
 ];
 
-const CheckoutModal = ({ isOpen, onClose, total, onComplete }: CheckoutModalProps) => {
+const defaultDeferPayment: CheckoutDeferPaymentProps = {
+  show: true,
+  canComplete: false,
+  subtitle: 'Vincula un cliente del registro en el carrito y activa venta a crédito en su ficha.',
+  disabledMessage: 'Configura cliente y permiso de crédito para usar esta opción.',
+};
+
+const CheckoutModal = ({
+  isOpen,
+  onClose,
+  total,
+  onComplete,
+  deferPayment = defaultDeferPayment,
+}: CheckoutModalProps) => {
   const [selectedMethod, setSelectedMethod] = useState<PaymentMethod | null>(null);
   const [cashAmount, setCashAmount] = useState('');
   const [cardNumber, setCardNumber] = useState('');
@@ -352,6 +375,23 @@ const CheckoutModal = ({ isOpen, onClose, total, onComplete }: CheckoutModalProp
           </div>
         );
 
+      case 'credit':
+        return (
+          <div className="payment-form">
+            <h3>Venta a crédito</h3>
+            <div className="amount-display">
+              <span>Total a cargar en cuenta del cliente:</span>
+              <span className="total-amount">${finalTotal.toFixed(2)}</span>
+            </div>
+            <p style={{ fontSize: '0.875rem', color: 'var(--bs-dark-text-muted, #64748b)', marginTop: '0.5rem' }}>
+              Se registrará en el historial de crédito / cobranza del cliente vinculado al carrito.
+            </p>
+            <button type="button" className="payment-btn" onClick={handlePayment} disabled={isProcessing}>
+              {isProcessing ? 'Procesando...' : 'Confirmar venta a crédito'}
+            </button>
+          </div>
+        );
+
       case 'mixed':
         return (
           <div className="payment-form">
@@ -621,6 +661,7 @@ const CheckoutModal = ({ isOpen, onClose, total, onComplete }: CheckoutModalProp
                 {paymentMethods.map((method) => (
                   <button
                     key={method.id}
+                    type="button"
                     className="method-card"
                     onClick={() => handleMethodSelect(method.id)}
                     style={{ borderColor: method.color }}
@@ -634,6 +675,40 @@ const CheckoutModal = ({ isOpen, onClose, total, onComplete }: CheckoutModalProp
                     </div>
                   </button>
                 ))}
+                {deferPayment.show ? (
+                  <button
+                    key="credit-sale"
+                    type="button"
+                    className={`method-card method-card--credit ${deferPayment.canComplete ? 'method-card--credit-enabled' : ''}`}
+                    onClick={() => {
+                      if (!deferPayment.canComplete) {
+                        toast.error(
+                          deferPayment.disabledMessage ||
+                            'No se puede usar venta a crédito con la configuración actual.',
+                        );
+                        return;
+                      }
+                      handleMethodSelect('credit');
+                    }}
+                    aria-disabled={!deferPayment.canComplete}
+                    style={{
+                      borderColor: deferPayment.canComplete ? '#0f766e' : '#94a3b8',
+                      opacity: deferPayment.canComplete ? 1 : 0.72,
+                      cursor: deferPayment.canComplete ? 'pointer' : 'not-allowed',
+                    }}
+                  >
+                    <div className="method-icon" style={{ color: deferPayment.canComplete ? '#0f766e' : '#64748b' }}>
+                      <Wallet size={24} />
+                    </div>
+                    <div className="method-info">
+                      <h4>Venta a crédito</h4>
+                      <p>
+                        {deferPayment.subtitle ||
+                          'Cuenta corriente del cliente (historial de cobranza)'}
+                      </p>
+                    </div>
+                  </button>
+                ) : null}
               </div>
             </div>
           )}

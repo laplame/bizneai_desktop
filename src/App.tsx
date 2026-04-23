@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { 
   ShoppingCart, 
@@ -40,10 +40,16 @@ import {
   isShopIdConfigured,
   syncKitchenEnabledFromMcp,
   mergeProductsFromServerPreserveImages,
+  applyMcpInventoryStatusToMergedCatalog,
+  getShopId,
 } from './utils/shopIdHelper';
 import { normalizeProductId } from './utils/productId';
 import { maybeSyncIfDue, setLastSyncTime } from './utils/syncService';
 import { createSale } from './api/sales';
+import {
+  enqueuePendingSale,
+  installPendingSalesSyncListeners,
+} from './services/pendingSalesSync';
 import { computeCartTaxBreakdownFromCartItems, loadTaxSettings } from './utils/taxSettings';
 import {
   loadCustomers,
@@ -53,7 +59,14 @@ import {
 } from './services/customerRegistry';
 import type { RegistryCustomer } from './types/customerRegistry';
 import type { RecoveredSalePayload } from './types/salesRecovery';
-import { recordSaleCreation } from './services/merkleTreeService';
+import { recordSaleCreation, type RecordSaleCreationMerkleRef } from './services/merkleTreeService';
+import {
+  reserveStockForWaitlist,
+  consumeWaitlistReservation,
+  rekeyWaitlistReservation,
+} from './services/waitlistInventory';
+import { removeWaitlistEntryById, updateWaitlistEntryFields } from './services/waitlistLifecycle';
+import { appendLedgerEntry } from './services/customerAccountLedger';
 import { printReceiptThermalOrDialog, printProductCatalog, isElectron } from './services/receiptPrintService';
 import BarcodeScanner from './components/BarcodeScanner';
 import CheckoutModal from './components/CheckoutModal';
@@ -70,6 +83,7 @@ import BizneAIChat from './components/BizneAIChat';
 import ComingSoon from './components/ComingSoon';
 import LiveClock from './components/LiveClock';
 import MerkleBlocksWidget from './components/MerkleBlocksWidget';
+import StockSyncPulse from './components/StockSyncPulse';
 import LocalPersistenceStatus from './components/LocalPersistenceStatus';
 import ScreenLock from './components/ScreenLock';
 import ConfigurationAccessGate from './components/ConfigurationAccessGate';
@@ -468,7 +482,10 @@ function App() {
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
   const [productForVariantModal, setProductForVariantModal] = useState<Product | null>(null);
   const [productManagementInitialView, setProductManagementInitialView] = useState<'list' | 'grid' | 'analytics' | 'inventory' | null>(null);
-  const [productManagementRestockProduct, setProductManagementRestockProduct] = useState<{ id: number; name: string } | null>(null);
+  const [productManagementRestockProduct, setProductManagementRestockProduct] = useState<{
+    id: number | string;
+    name: string;
+  } | null>(null);
   const [isReportsOpen, setIsReportsOpen] = useState(false);
   const [isProductManagementOpen, setIsProductManagementOpen] = useState(false);
   const [isCustomerManagementOpen, setIsCustomerManagementOpen] = useState(false);
@@ -483,6 +500,45 @@ function App() {
   const [customerInfo, setCustomerInfo] = useState<CustomerInfo>({});
   const [orderNotes, setOrderNotes] = useState<string>('');
   const [customerInfoCollapsed, setCustomerInfoCollapsed] = useState(true);
+  /** Entrada de lista de espera cargada al carrito; al cobrar se cierra el ciclo y libera la reserva lógica. */
+  const pendingWaitlistEntryIdRef = useRef<string | null>(null);
+
+  /** Checkout: tarjeta "Venta a crédito" (cuenta cliente / historial de cobranza). Siempre visible en el modal. */
+  const checkoutDeferPayment = useMemo(() => {
+    if (customerInfo.customerId == null) {
+      return {
+        show: true as const,
+        canComplete: false as const,
+        subtitle:
+          'Carga la venta a la cuenta de un cliente del registro. En el carrito, abre «Información del cliente» y elige un cliente.',
+        disabledMessage:
+          'Selecciona un cliente del registro en el carrito para habilitar venta a crédito.',
+      };
+    }
+    const list = loadCustomers();
+    const c = list.find((x) => x.id === customerInfo.customerId);
+    const base = c ? getCustomerFullName(c) : (customerInfo.name || 'Cliente vinculado');
+    if (!c?.allowCredit) {
+      return {
+        show: true as const,
+        canComplete: false as const,
+        subtitle: `${base} · activa «Venta a crédito» en Gestión de clientes para esta cuenta.`,
+        disabledMessage:
+          'Edita el cliente en Gestión de clientes y activa venta a crédito para cargar cobros en su historial.',
+      };
+    }
+    const limit = c.commercialConditions?.creditLimitAmount;
+    const subtitle =
+      limit != null && Number(limit) > 0
+        ? `${base} · límite $${Number(limit).toFixed(2)} · cuenta corriente`
+        : `${base} · se registrará en historial de crédito (cobranza)`;
+    return {
+      show: true as const,
+      canComplete: true as const,
+      subtitle,
+      disabledMessage: '',
+    };
+  }, [customerInfo.customerId, customerInfo.name, isCheckoutOpen]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [lastSaleData, setLastSaleData] = useState<{
     saleId: string;
@@ -548,7 +604,8 @@ function App() {
           }
           const mappedProducts = mcpProducts.map((p: unknown, index: number) => mapMcpProductToLocal(p, index));
           const merged = mergeProductsFromServerPreserveImages(savedParsed, mappedProducts);
-          const mergedCached = await syncProductImagesToLocalDisk(merged);
+          const mergedWithInv = await applyMcpInventoryStatusToMergedCatalog(merged);
+          const mergedCached = await syncProductImagesToLocalDisk(mergedWithInv);
           const hydrated = hydrateProductsForPos(mergedCached);
           setProducts(hydrated);
           setCategories(extractCategories(hydrated));
@@ -624,7 +681,8 @@ function App() {
           }
           const mappedProducts = mcpProducts.map((p: unknown, index: number) => mapMcpProductToLocal(p, index));
           const merged = mergeProductsFromServerPreserveImages(savedParsed, mappedProducts);
-          const mergedCached = await syncProductImagesToLocalDisk(merged);
+          const mergedWithInv = await applyMcpInventoryStatusToMergedCatalog(merged);
+          const mergedCached = await syncProductImagesToLocalDisk(mergedWithInv);
           const hydrated = hydrateProductsForPos(mergedCached);
           setProducts(hydrated);
           setCategories(extractCategories(hydrated));
@@ -638,6 +696,22 @@ function App() {
     }
     maybeSyncIfDue();
   };
+
+  // Cola de ventas offline → reenvío al volver online + refresco de inventario remoto
+  useEffect(() => {
+    installPendingSalesSyncListeners();
+    const onPendingSalesToast = (e: Event) => {
+      const ce = e as CustomEvent<{ count?: number }>;
+      const n = typeof ce.detail?.count === 'number' ? ce.detail.count : 0;
+      if (n > 0) {
+        toast.success(
+          `${n} venta(s) pendiente(s) enviada(s) al servidor. El inventario en línea se actualizó.`
+        );
+      }
+    };
+    window.addEventListener('pending-sales-sync-toast', onPendingSalesToast);
+    return () => window.removeEventListener('pending-sales-sync-toast', onPendingSalesToast);
+  }, []);
 
   // Cargar contadores de pedidos al iniciar
   useEffect(() => {
@@ -1139,6 +1213,7 @@ function App() {
 
   // Limpiar carrito
   const clearCart = () => {
+    pendingWaitlistEntryIdRef.current = null;
     setCart([]);
     setCustomerInfo({});
     setOrderNotes('');
@@ -1205,14 +1280,12 @@ function App() {
       return;
     }
 
-    // Obtener shopId desde localStorage
     const storeId = localStorage.getItem('bizneai-store-identifiers');
-    let shopId = 'local-shop';
-    
+    let shopId = getShopId() || 'local-shop';
     if (storeId) {
       try {
-        const parsed = JSON.parse(storeId);
-        shopId = parsed._id || 'local-shop';
+        const parsed = JSON.parse(storeId) as { _id?: string; shopId?: string };
+        shopId = (parsed._id || parsed.shopId || shopId) as string;
       } catch (error) {
         console.error('Error parsing store identifiers:', error);
       }
@@ -1221,20 +1294,33 @@ function App() {
     setIsProcessing(true);
 
     try {
-      const items = cart.map(item => ({
-        product: {
-          id: item.product.id.toString(),
-          name: item.product.name,
-          price: item.product.price,
-          category: item.product.category
-        },
-        quantity: item.product.isWeightBased ? (item.weight || 0) : item.quantity
-      }));
+      const firstHttpImage = (p: unknown): string | undefined => {
+        const arr = p && typeof p === 'object' && 'images' in p ? (p as { images?: string[] }).images : undefined;
+        if (!Array.isArray(arr)) return undefined;
+        for (const u of arr) {
+          if (typeof u === 'string' && /^https?:\/\//i.test(u.trim())) return u.trim();
+        }
+        return undefined;
+      };
+
+      const items = cart.map((item) => {
+        const img = firstHttpImage(item.product);
+        return {
+          product: {
+            id: item.product.id.toString(),
+            name: item.product.name,
+            price: item.product.price,
+            category: item.product.category || 'General',
+            ...(img ? { image: img } : {}),
+          },
+          quantity: item.product.isWeightBased ? (item.weight || 0) : item.quantity,
+        };
+      });
 
       const total = cart.reduce((sum, item) => sum + item.itemTotal, 0);
       const customerName = customerInfo.name || 'Cliente';
 
-      const waitlistEntry = {
+      let waitlistEntry: Record<string, unknown> = {
         _id: `waitlist_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
         shopId: shopId,
         name: customerName,
@@ -1242,25 +1328,62 @@ function App() {
         total,
         source: 'local' as const,
         status: 'waiting' as const,
+        fulfillmentState: 'waitlist_reserved' as const,
+        customerId: customerInfo.customerId,
         notes: orderNotes || undefined,
-        customerInfo: customerInfo.name ? customerInfo : undefined,
-        timestamp: new Date().toISOString()
+        customerInfo: customerInfo.name
+          ? {
+              name: customerInfo.name,
+              phone: customerInfo.phone,
+              email: customerInfo.email,
+              customerId: customerInfo.customerId,
+            }
+          : { name: customerName },
+        timestamp: new Date().toISOString(),
       };
 
-      // Intentar guardar en servidor
+      const reserveLines = cart.map((item) => ({
+        productId: String(item.product.id),
+        quantity: item.product.isWeightBased ? Number(item.weight || 0) : Number(item.quantity),
+      }));
+      const reserved = reserveStockForWaitlist(products, String(waitlistEntry._id), reserveLines);
+      if (!reserved.ok) {
+        toast.error('error' in reserved ? reserved.error : 'No se pudo reservar inventario');
+        return;
+      }
+      setProducts(reserved.nextProducts as Product[]);
+
       try {
-        await waitlistAPI.addToShopWaitlist(shopId, {
+        const serverRes = await waitlistAPI.addToShopWaitlist(shopId, {
           name: customerName,
           items,
           total,
           source: 'local',
           notes: orderNotes || undefined,
-          customerInfo: customerInfo && customerInfo.name ? {
-            name: customerInfo.name,
-            phone: customerInfo.phone,
-            email: customerInfo.email
-          } : { name: customerName }
+          customerInfo:
+            customerInfo && customerInfo.name
+              ? {
+                  name: customerInfo.name,
+                  phone: customerInfo.phone,
+                  email: customerInfo.email,
+                }
+              : { name: customerName },
         });
+        if (serverRes.success && serverRes.data && typeof serverRes.data === 'object') {
+          const d = serverRes.data as unknown as { _id?: string; [k: string]: unknown };
+          const sid = d._id != null ? String(d._id) : '';
+          if (sid && sid !== String(waitlistEntry._id)) {
+            rekeyWaitlistReservation(String(waitlistEntry._id), sid);
+          }
+          if (sid) {
+            Object.assign(waitlistEntry, {
+              ...d,
+              _id: sid,
+              fulfillmentState: 'waitlist_reserved' as const,
+              customerId: waitlistEntry.customerId,
+            });
+          }
+        }
       } catch (error) {
         console.error('Error saving to server, using local storage:', error);
       }
@@ -1300,6 +1423,11 @@ function App() {
   // Manejar completar checkout (crea venta en API según Sales Sync Model)
   const handleCheckoutComplete = async (paymentMethod: string, amount: number, change?: number) => {
     const saleId = `TKT-${Math.floor(Math.random() * 100000) + 10000}`;
+    const wlEntryId = pendingWaitlistEntryIdRef.current;
+    const isCredit = String(paymentMethod).toLowerCase() === 'credit';
+    const notesMerged =
+      [orderNotes?.trim(), isCredit ? 'Venta a crédito (cuenta cliente)' : ''].filter(Boolean).join(' · ') ||
+      undefined;
     const { subtotalExclTax, taxAmount } = computeCartTaxBreakdownFromCartItems(
       cart.map((item) => ({ itemTotal: item.itemTotal, product: item.product })),
       loadTaxSettings()
@@ -1339,14 +1467,90 @@ function App() {
       tax,
       discount,
       total: amount,
-      paymentMethod,
+      paymentMethod: isCredit ? 'credit' : paymentMethod,
       orderType: 'dine-in' as const,
       source: 'local' as const,
-      notes: orderNotes || undefined,
+      notes: notesMerged,
     };
 
+    const historyNotes =
+      [
+        apiPayload.notes,
+        wlEntryId ? `Origen: lista de espera (entrada ${wlEntryId})` : '',
+        isCredit
+          ? 'Pago: crédito (cuenta cliente)'
+          : `Pago: ${String(paymentMethod)} · estado cobro: completado`,
+      ]
+        .filter(Boolean)
+        .join(' · ') || undefined;
+
+    let merkleSaleRef: RecordSaleCreationMerkleRef | undefined;
+    try {
+      merkleSaleRef = await recordSaleCreation({
+        saleId,
+        transactionId: saleId,
+        customerName: apiPayload.customerName,
+        ...(customerInfo.customerId != null ? { customerId: customerInfo.customerId } : {}),
+        items: apiPayload.items,
+        subtotal: apiPayload.subtotal,
+        tax: apiPayload.tax,
+        discount: apiPayload.discount,
+        total: apiPayload.total,
+        paymentMethod: apiPayload.paymentMethod,
+        paymentStatus: isCredit ? 'completed_on_account' : 'completed',
+        date: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+        notes: historyNotes,
+        saleFulfillmentState: wlEntryId ? 'completed' : undefined,
+        originatedFromWaitlist: Boolean(wlEntryId),
+        ...(wlEntryId ? { waitlistEntryId: wlEntryId } : {}),
+      });
+    } catch (merkleErr) {
+      console.warn('[SALE] Merkle recordSaleCreation:', merkleErr);
+    }
+
+    const clientEventId =
+      typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : `evt-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+
     console.log('[SALE] handleCheckoutComplete → createSale', { saleId, amount, items: apiPayload.items?.length });
-    const result = await createSale(apiPayload);
+    const result = await createSale({
+      ...apiPayload,
+      clientEventId,
+      ...(merkleSaleRef
+        ? {
+            saleMerkle: {
+              merkleTransactionId: merkleSaleRef.merkleTransactionId,
+              merkleTransactionHash: merkleSaleRef.merkleTransactionHash,
+              merkleProof: [],
+            },
+          }
+        : {}),
+    });
+
+    const shopForSaleQueue = getShopId();
+    if (!result.success && result.retriable && shopForSaleQueue) {
+      enqueuePendingSale({
+        id: clientEventId,
+        shopId: shopForSaleQueue,
+        clientEventId,
+        payload: {
+          ...apiPayload,
+          clientEventId,
+          ...(merkleSaleRef
+            ? {
+                saleMerkle: {
+                  merkleTransactionId: merkleSaleRef.merkleTransactionId,
+                  merkleTransactionHash: merkleSaleRef.merkleTransactionHash,
+                  merkleProof: [] as string[],
+                },
+              }
+            : {}),
+        },
+        enqueuedAt: Date.now(),
+      });
+    }
     console.log('[SALE] handleCheckoutComplete ← createSale', { success: result.success, error: result.error });
 
     const resultData = result.data as Record<string, unknown> | undefined;
@@ -1360,44 +1564,85 @@ function App() {
       saleId;
     const remoteClientEventId =
       (typeof resultData?.clientEventId === 'string' && resultData.clientEventId) ||
-      (nestedData && typeof nestedData.clientEventId === 'string' ? nestedData.clientEventId : undefined);
+      (nestedData && typeof nestedData.clientEventId === 'string' ? nestedData.clientEventId : undefined) ||
+      clientEventId;
 
     recordSaleCashier({
       transactionId: remoteTransactionId,
       clientEventId: remoteClientEventId,
       total: amount,
-      paymentMethod,
+      paymentMethod: isCredit ? 'credit' : paymentMethod,
       itemsSummary: apiPayload.items.map((i) => `${i.productName} x${i.quantity}`).join(', '),
       identity: getScreenLockIdentity(),
     });
 
-    // Registrar en Merkle Tree (historial inmutable local)
-    try {
-      await recordSaleCreation({
-        saleId,
-        transactionId: saleId,
-        customerName: apiPayload.customerName,
-        items: apiPayload.items,
-        subtotal: apiPayload.subtotal,
-        tax: apiPayload.tax,
-        discount: apiPayload.discount,
-        total: apiPayload.total,
-        paymentMethod: apiPayload.paymentMethod,
-        paymentStatus: 'completed',
-        date: new Date().toISOString(),
-        createdAt: new Date().toISOString(),
-        notes: apiPayload.notes,
+    if (wlEntryId) {
+      const shopForWaitlistSync = (() => {
+        const storeId = localStorage.getItem('bizneai-store-identifiers');
+        let sid = getShopId() || '';
+        if (storeId) {
+          try {
+            const parsed = JSON.parse(storeId) as { _id?: string; shopId?: string };
+            sid = (parsed._id || parsed.shopId || sid) as string;
+          } catch {
+            /* ignore */
+          }
+        }
+        return sid.trim() || null;
+      })();
+      const canSyncWaitlistToApi = shopForWaitlistSync && !String(wlEntryId).startsWith('waitlist_');
+      if (canSyncWaitlistToApi) {
+        try {
+          const wlRes = await waitlistAPI.patchWaitlistEntryStatus(
+            shopForWaitlistSync,
+            String(wlEntryId),
+            'completed'
+          );
+          if (!wlRes.success) {
+            console.warn('[SALE] Waitlist upstream status:', wlRes.error);
+          }
+        } catch (e) {
+          console.warn('[SALE] Waitlist upstream status sync failed', e);
+        }
+      }
+
+      consumeWaitlistReservation(wlEntryId);
+      removeWaitlistEntryById(wlEntryId);
+      pendingWaitlistEntryIdRef.current = null;
+    }
+
+    if (isCredit && customerInfo.customerId != null) {
+      const led = appendLedgerEntry({
+        customerId: customerInfo.customerId,
+        kind: 'cobranza',
+        amount,
+        note: `Venta a crédito ${saleId}`,
       });
-    } catch (merkleErr) {
-      console.warn('[SALE] Merkle recordSaleCreation:', merkleErr);
+      if (!led.ok && 'error' in led) {
+        toast.error(led.error);
+      }
     }
 
     if (result.success) {
       toast.success(`Venta #${saleId} completada por $${amount.toFixed(2)} (sincronizada)`);
+    } else if (result.retriable && shopForSaleQueue) {
+      toast.success(
+        `Venta #${saleId} registrada en el POS · se enviará al servidor al recuperar conexión (inventario remoto).`
+      );
+      if (result.error) {
+        console.warn('[SALE] Venta en cola de sincronización:', result.error);
+      }
+    } else if (result.retriable) {
+      toast.success(
+        `Venta #${saleId} registrada en el POS · configure el ID de tienda para sincronizar inventario con el servidor.`
+      );
+      if (result.error) {
+        console.warn('[SALE] Sin shopId para cola de ventas:', result.error);
+      }
     } else {
       toast.success(`Venta #${saleId} completada por $${amount.toFixed(2)}`);
       if (result.error) {
-        console.warn('[SALE] Venta guardada localmente, sync pendiente:', result.error);
+        console.warn('[SALE] Venta guardada localmente, sync no reintentable:', result.error);
       }
     }
 
@@ -1430,7 +1675,7 @@ function App() {
         subtotal,
         tax,
         total: amount,
-        paymentMethod,
+        paymentMethod: isCredit ? 'Crédito (cuenta)' : paymentMethod,
       });
       if (!printResult.success && printResult.error && isElectron()) {
         setPrintErrorModal({ message: printResult.error });
@@ -1439,6 +1684,40 @@ function App() {
       if (isElectron()) {
         const errMsg = e instanceof Error ? e.message : String(e);
         setPrintErrorModal({ message: errMsg || 'Error desconocido al imprimir' });
+      }
+    }
+
+    // Cobro desde POS (sin lista de espera): antes no se descontaba stock en `bizneai-products`, mientras el API
+    // sí actualizaba inventario en línea → discrepancias (p. ej. 15 en POS vs 14 en app). Lista de espera ya
+    // descontó al reservar (`reserveStockForWaitlist`); no volver a descontar.
+    if (!wlEntryId && cart.length > 0) {
+      const qtyByProductId = new Map<string, number>();
+      for (const item of cart) {
+        const id = String(item.product.id);
+        const qty = item.product.isWeightBased ? Number(item.weight || 0) : Number(item.quantity);
+        if (!Number.isFinite(qty) || qty <= 0) continue;
+        qtyByProductId.set(id, (qtyByProductId.get(id) || 0) + qty);
+      }
+      if (qtyByProductId.size > 0) {
+        setProducts((prev) => {
+          const next = prev.map((p) => {
+            const q = qtyByProductId.get(String(p.id));
+            if (q == null || q <= 0) return p;
+            const stock = Number(p.stock ?? 0);
+            const newStock = p.isWeightBased
+              ? Math.max(0, stock - q)
+              : Math.max(0, Math.round(stock - q));
+            return { ...p, stock: newStock };
+          });
+          try {
+            localStorage.setItem('bizneai-products', JSON.stringify(next));
+            scheduleMirrorKeyToSqlite('bizneai-products');
+            window.dispatchEvent(new Event('products-updated'));
+          } catch {
+            /* ignore */
+          }
+          return next;
+        });
       }
     }
 
@@ -1597,9 +1876,11 @@ function App() {
     notes?: string;
   }
   interface WaitlistEntryForCart {
+    _id?: string;
     name?: string;
     items: WaitlistCartItem[];
-    customerInfo?: { name?: string; phone?: string; email?: string };
+    customerInfo?: { name?: string; phone?: string; email?: string; customerId?: number };
+    customerId?: number;
     notes?: string;
   }
 
@@ -1608,6 +1889,13 @@ function App() {
     if (!entry.items || entry.items.length === 0) {
       toast.error('Esta entrada no tiene items para cargar al carrito');
       return;
+    }
+
+    if (entry._id) {
+      updateWaitlistEntryFields(entry._id, { fulfillmentState: 'pending_settlement' });
+      pendingWaitlistEntryIdRef.current = entry._id;
+    } else {
+      pendingWaitlistEntryIdRef.current = null;
     }
 
     // Limpiar el carrito actual antes de cargar la nueva orden
@@ -1637,15 +1925,17 @@ function App() {
     });
     
     // Cargar información del cliente si existe
+    const regId = entry.customerInfo?.customerId ?? entry.customerId;
     if (entry.customerInfo) {
       setCustomerInfo({
         name: entry.customerInfo.name || entry.name,
         phone: entry.customerInfo.phone,
-        email: entry.customerInfo.email
+        email: entry.customerInfo.email,
+        customerId: regId,
       });
     } else if (entry.name) {
       // Si no hay customerInfo pero hay name, usarlo
-      setCustomerInfo({ name: entry.name });
+      setCustomerInfo({ name: entry.name, ...(regId != null ? { customerId: regId } : {}) });
     }
     
     // Cargar notas de la orden si existen
@@ -1807,14 +2097,6 @@ function App() {
             <LocalPersistenceStatus sidebarMinimal={sidebarMinimal} />
           </div>
 
-          {/* Bloques Merkle - debajo del reloj */}
-          <div className={`sidebar-section ${sidebarMinimal ? 'sidebar-section-minimal' : ''} sidebar-merkle-widget`}>
-            <MerkleBlocksWidget
-              onOpenSales={() => handleSectionChange('reports')}
-              compact={sidebarMinimal}
-            />
-          </div>
-
           {/* Punto de venta */}
           <div className={`sidebar-section ${sidebarMinimal ? 'sidebar-section-minimal' : ''}`}>
             <div
@@ -1974,6 +2256,14 @@ function App() {
               <SettingsIcon size={sidebarMinimal ? 22 : 20} />
               {!sidebarMinimal && 'Configuración'}
             </div>
+          </div>
+
+          {/* Bloques — debajo de Configuración */}
+          <div className={`sidebar-section ${sidebarMinimal ? 'sidebar-section-minimal' : ''} sidebar-merkle-widget`}>
+            <MerkleBlocksWidget
+              onOpenSales={() => handleSectionChange('reports')}
+              compact={sidebarMinimal}
+            />
           </div>
 
           {/* Versión */}
@@ -2426,10 +2716,10 @@ function App() {
                     </button>
                     {showKitchenModule && (
                       <button 
-                        className="action-btn"
+                        type="button"
+                        className="action-btn cart-btn-kitchen-tertiary"
                         onClick={handleAddCartToKitchen}
                         title="Enviar a cocina"
-                        style={{ background: 'var(--bs-primary)', color: 'white' }}
                       >
                         <ChefHat size={20} style={{ marginRight: '0.5rem' }} />
                         Enviar a Cocina
@@ -2497,9 +2787,13 @@ function App() {
         {/* Checkout Modal */}
         <CheckoutModal
           isOpen={isCheckoutOpen}
-          onClose={() => setIsCheckoutOpen(false)}
+          onClose={() => {
+            setIsCheckoutOpen(false);
+            pendingWaitlistEntryIdRef.current = null;
+          }}
           total={cartTax.total}
           onComplete={handleCheckoutComplete}
+          deferPayment={checkoutDeferPayment}
         />
 
         {/* Modal Error de Impresión */}
@@ -2645,6 +2939,8 @@ function App() {
             },
           }}
         />
+
+        <StockSyncPulse />
 
         {/* Product Upload Modal */}
         {showProductUpload && (

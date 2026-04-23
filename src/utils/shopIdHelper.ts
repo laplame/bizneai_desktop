@@ -4,8 +4,10 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- Respuestas MCP heterogéneas; tipado estricto en mapMcp* y helpers nuevos */
 import { normalizeProductId } from './productId';
 import { getLocalApiOrigin, shouldUseSalesMcpProxy } from './localApiBase';
+import { buildMcpResourceUrl } from './mcpResourceUrl';
 import { scheduleMirrorKeyToSqlite } from '../services/posPersistService';
 import { MCP_SNAPSHOT, mirrorMcpPayloadToLocalSql } from '../services/mcpSnapshotMirror';
+import { getComponentsFromProductRecord } from './productComponents';
 /**
  * Get the shop ID from localStorage or context
  * @returns Shop ID string or null if not found
@@ -28,7 +30,10 @@ export const getShopId = (): string | null => {
       if (identifiers.shopId) {
         return identifiers.shopId;
       }
-      // Also check clientId as fallback
+      // Misma resolución que waitlist/cocina: algunas sesiones guardan solo _id (Mongo)
+      if (identifiers._id) {
+        return identifiers._id;
+      }
       if (identifiers.clientId) {
         return identifiers.clientId;
       }
@@ -250,6 +255,188 @@ export const getInventoryFromMcp = async (): Promise<any | null> => {
   }
 };
 
+/** Fila normalizada de GET …/mcp/:shopId/inventory/status para fusionar stock en el catálogo POS. */
+export type McpInventoryStockRow = {
+  productId: string;
+  stock: number;
+  minStock?: number;
+  maxStock?: number;
+};
+
+function parseFiniteNumber(v: unknown): number | undefined {
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  if (typeof v === 'string' && v.trim() !== '') {
+    const n = Number(v);
+    if (Number.isFinite(n)) return n;
+  }
+  return undefined;
+}
+
+function inventoryStatusRowFromUnknown(row: unknown): McpInventoryStockRow | null {
+  if (!row || typeof row !== 'object') return null;
+  const r = row as Record<string, unknown>;
+  const productIdRaw = r.productId ?? r.product_id ?? r.id;
+  if (productIdRaw == null || String(productIdRaw).trim() === '') return null;
+  const stock = parseFiniteNumber(r.currentStock ?? r.quantity ?? r.stock ?? r.available ?? r.current_quantity);
+  if (stock === undefined) return null;
+  const minStock = parseFiniteNumber(r.minStock ?? r.min_stock);
+  const maxStock = parseFiniteNumber(r.maxStock ?? r.max_stock);
+  return {
+    productId: String(productIdRaw),
+    stock,
+    ...(minStock !== undefined ? { minStock } : {}),
+    ...(maxStock !== undefined ? { maxStock } : {}),
+  };
+}
+
+function extractInventoryStatusArray(payload: unknown): unknown[] {
+  if (Array.isArray(payload)) return payload;
+  if (payload && typeof payload === 'object') {
+    const root = payload as Record<string, unknown>;
+    const inner = (root.data && typeof root.data === 'object' ? root.data : root) as Record<string, unknown>;
+    if (Array.isArray(inner.data)) return inner.data;
+    for (const k of ['items', 'status', 'inventory', 'results', 'rows']) {
+      const v = inner[k];
+      if (Array.isArray(v)) return v;
+    }
+  }
+  return [];
+}
+
+/**
+ * GET `/api/mcp/:shopId/inventory/status` (o proxy local) y devuelve filas listas para fusionar con productos.
+ * `null` = error de red o respuesta no OK; `[]` = sin filas útiles.
+ */
+export async function fetchMcpInventoryStatusStockRows(): Promise<McpInventoryStockRow[] | null> {
+  const shopId = getShopId();
+  if (!shopId) return null;
+  const url = buildMcpResourceUrl(shopId, 'inventory/status', { limit: 500, page: 1 });
+  try {
+    const response = await fetch(url, { headers: { Accept: 'application/json' } });
+    if (!response.ok) return null;
+    const raw = await response.json();
+    const arr = extractInventoryStatusArray(raw);
+    const out: McpInventoryStockRow[] = [];
+    for (const row of arr) {
+      const parsed = inventoryStatusRowFromUnknown(row);
+      if (parsed) out.push(parsed);
+    }
+    return out;
+  } catch (error) {
+    console.error('Error fetching MCP inventory/status:', error);
+    return null;
+  }
+}
+
+/** Aplica stocks (y min/max si vienen) del inventario MCP al catálogo ya mapeado. Empareja por `id` o `sku`. */
+export function applyMcpInventoryStockRowsToProducts(
+  products: Record<string, unknown>[],
+  rows: McpInventoryStockRow[]
+): Record<string, unknown>[] {
+  if (!rows.length) return products;
+  const byKey = new Map<string, McpInventoryStockRow>();
+  for (const row of rows) {
+    byKey.set(row.productId, row);
+  }
+  const ts = new Date().toISOString();
+  return products.map((p) => {
+    const idStr = p.id != null ? String(p.id) : '';
+    const skuStr = String(p.sku ?? '').trim();
+    let row = idStr ? byKey.get(idStr) : undefined;
+    if (!row && skuStr) row = byKey.get(skuStr);
+    if (!row) return p;
+    const next: Record<string, unknown> = { ...p, stock: row.stock, updatedAt: ts };
+    if (row.minStock !== undefined) next.minStock = row.minStock;
+    if (row.maxStock !== undefined) next.maxStock = row.maxStock;
+    return next;
+  });
+}
+
+/**
+ * Tras fusionar catálogo MCP + local: alinea `stock` (y min/max) con GET `inventory/status`
+ * cuando el servidor lo expone — misma fuente que suele verse “en línea” en inventario.
+ */
+export async function applyMcpInventoryStatusToMergedCatalog(
+  merged: Record<string, unknown>[]
+): Promise<Record<string, unknown>[]> {
+  const rows = await fetchMcpInventoryStatusStockRows();
+  if (rows == null || rows.length === 0) return merged;
+  return applyMcpInventoryStockRowsToProducts(merged, rows);
+}
+
+export type StockInventoryPullResult = {
+  ok: boolean;
+  /** Productos cuyo stock o límites min/max cambiaron respecto al local */
+  updatedRows: number;
+  reason?: 'no_shop' | 'no_catalog' | 'fetch_failed' | 'no_inventory_rows' | 'none';
+};
+
+/**
+ * Sincronización ligera: solo GET `inventory/status` y aplica sobre `bizneai-products` local.
+ * No descarga el catálogo completo (menos red que `pullProductsFromMcpToLocalStorage`).
+ */
+export async function syncLocalProductStocksFromMcpInventoryStatus(): Promise<StockInventoryPullResult> {
+  if (typeof window === 'undefined') {
+    return { ok: false, updatedRows: 0, reason: 'no_catalog' };
+  }
+  if (!getShopId()) {
+    return { ok: false, updatedRows: 0, reason: 'no_shop' };
+  }
+  const raw = localStorage.getItem('bizneai-products');
+  if (!raw) {
+    return { ok: false, updatedRows: 0, reason: 'no_catalog' };
+  }
+  let parsed: unknown[];
+  try {
+    const j = JSON.parse(raw) as unknown;
+    if (!Array.isArray(j) || j.length === 0) {
+      return { ok: false, updatedRows: 0, reason: 'no_catalog' };
+    }
+    parsed = j;
+  } catch {
+    return { ok: false, updatedRows: 0, reason: 'no_catalog' };
+  }
+
+  const rows = await fetchMcpInventoryStatusStockRows();
+  if (rows === null) {
+    return { ok: false, updatedRows: 0, reason: 'fetch_failed' };
+  }
+  if (rows.length === 0) {
+    return { ok: true, updatedRows: 0, reason: 'no_inventory_rows' };
+  }
+
+  const asRecords = parsed as Record<string, unknown>[];
+  const next = applyMcpInventoryStockRowsToProducts(asRecords, rows);
+
+  const stockishChanged = (a: Record<string, unknown>, b: Record<string, unknown>): boolean => {
+    return (
+      Number(a.stock) !== Number(b.stock) ||
+      Number(a.minStock ?? 0) !== Number(b.minStock ?? 0) ||
+      Number(a.maxStock ?? 0) !== Number(b.maxStock ?? 0)
+    );
+  };
+
+  let updatedRows = 0;
+  for (let i = 0; i < next.length; i++) {
+    const prev = asRecords[i];
+    const nxt = next[i];
+    if (prev && nxt && stockishChanged(prev, nxt)) updatedRows += 1;
+  }
+
+  if (updatedRows === 0) {
+    return { ok: true, updatedRows: 0, reason: 'none' };
+  }
+
+  localStorage.setItem('bizneai-products', JSON.stringify(next));
+  scheduleMirrorKeyToSqlite('bizneai-products');
+  try {
+    window.dispatchEvent(new Event('products-updated'));
+  } catch {
+    /* ignore */
+  }
+  return { ok: true, updatedRows };
+}
+
 /**
  * Get transactions/sales from MCP endpoint
  * @returns Promise with transactions array or null if error
@@ -314,6 +501,7 @@ export const mapMcpProductToLocal = (mcpProduct: unknown, index: number = 0): Re
     isWeightBased: Boolean(p.isWeightBased),
     priceIncludesTax: typeof p.priceIncludesTax === 'boolean' ? p.priceIncludesTax : undefined,
     taxExempt: typeof p.taxExempt === 'boolean' ? p.taxExempt : undefined,
+    components: getComponentsFromProductRecord(p),
   };
 };
 
@@ -342,6 +530,7 @@ const SYNC_DATA_KEYS: readonly string[] = [
   'createdAt',
   'updatedAt',
   'tags',
+  'components',
 ];
 
 function productDataFingerprint(row: Record<string, unknown>): string {
@@ -364,9 +553,7 @@ function shouldKeepLocalUnchanged(
   prev: Record<string, unknown>,
   remote: Record<string, unknown>
 ): boolean {
-  const u1 = String(prev.updatedAt ?? '').trim();
-  const u2 = String(remote.updatedAt ?? '').trim();
-  if (u1 && u2 && u1 === u2) return true;
+  /** No usar solo `updatedAt`: el stock puede cambiar en inventario/`inventory/status` sin tocar el documento catálogo. */
   return productDataFingerprint(prev) === productDataFingerprint(remote);
 }
 

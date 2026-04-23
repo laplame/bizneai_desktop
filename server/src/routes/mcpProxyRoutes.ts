@@ -3,9 +3,19 @@
  */
 import express from 'express';
 import axios from 'axios';
+import { appendMerkleLedgerBlock } from '../services/merkleLedgerStore.js';
 
 const router = express.Router();
 const BIZNEAI_ORIGIN = 'https://www.bizneai.com';
+
+function sanitizeSaleBodyForLog(body: unknown): unknown {
+  if (!body || typeof body !== 'object') return body;
+  const b = body as Record<string, unknown>;
+  const out: Record<string, unknown> = { ...b };
+  if (typeof out.customerEmail === 'string' && out.customerEmail) out.customerEmail = '[redacted-email]';
+  if (typeof out.customerPhone === 'string' && out.customerPhone) out.customerPhone = '[redacted-phone]';
+  return out;
+}
 
 /** POST /api/proxy/sales/:shopId - Proxy para Sales API principal (POST /api/:shopId/sales) */
 router.post('/sales/:shopId', async (req, res) => {
@@ -22,6 +32,14 @@ router.post('/sales/:shopId', async (req, res) => {
       validateStatus: () => true,
     });
 
+    if (response.status >= 400) {
+      console.error('[Sales Proxy] Upstream error', {
+        targetUrl,
+        status: response.status,
+        data: response.data,
+        requestBody: sanitizeSaleBodyForLog(req.body),
+      });
+    }
     res.status(response.status).json(response.data);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Proxy error';
@@ -48,6 +66,14 @@ router.post('/mcp/:shopId/sales', async (req, res) => {
       validateStatus: () => true,
     });
 
+    if (response.status >= 400) {
+      console.error('[MCP Proxy] Upstream error (sales)', {
+        targetUrl,
+        status: response.status,
+        data: response.data,
+        requestBody: sanitizeSaleBodyForLog(req.body),
+      });
+    }
     res.status(response.status).json(response.data);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Proxy error';
@@ -59,10 +85,62 @@ router.post('/mcp/:shopId/sales', async (req, res) => {
   }
 });
 
+/** POST /api/proxy/mcp/:shopId/luxae-telemetry — métricas Luxae para dashboard (POST /api/mcp/:shopId/luxae-telemetry) */
+router.post('/mcp/:shopId/luxae-telemetry', async (req, res) => {
+  const { shopId } = req.params;
+  const targetUrl = `${BIZNEAI_ORIGIN}/api/mcp/${shopId}/luxae-telemetry`;
+
+  try {
+    const response = await axios.post(targetUrl, req.body, {
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      timeout: 15000,
+      validateStatus: () => true,
+    });
+
+    res.status(response.status).json(response.data);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Proxy error';
+    console.error('[Luxae telemetry Proxy] Error forwarding to', targetUrl, message);
+    res.status(502).json({
+      success: false,
+      error: message,
+    });
+  }
+});
+
+/** POST /api/proxy/mcp/:shopId/blocks/summary — resumen de bloques + LUX (POST /api/mcp/:shopId/blocks/summary) */
+router.post('/mcp/:shopId/blocks/summary', async (req, res) => {
+  const { shopId } = req.params;
+  const targetUrl = `${BIZNEAI_ORIGIN}/api/mcp/${shopId}/blocks/summary`;
+  try {
+    const response = await axios.post(targetUrl, req.body, {
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      timeout: 15000,
+      validateStatus: () => true,
+    });
+    res.status(response.status).json(response.data);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Proxy error';
+    console.error('[MCP blocks/summary POST]', message);
+    res.status(502).json({ success: false, error: message });
+  }
+});
+
 /** POST /api/proxy/blocks/:shopId - Proxy para enviar bloque diario (POST /api/mcp/:shopId/blocks) */
 router.post('/blocks/:shopId', async (req, res) => {
   const { shopId } = req.params;
   const targetUrl = `${BIZNEAI_ORIGIN}/api/mcp/${shopId}/blocks`;
+
+  try {
+    if (req.body && typeof req.body === 'object') {
+      appendMerkleLedgerBlock(shopId, req.body as Record<string, unknown>);
+    }
+  } catch (e) {
+    console.warn('[Blocks Proxy] ledger local:', e);
+  }
 
   try {
     const response = await axios.post(targetUrl, req.body, {
@@ -256,6 +334,39 @@ router.post('/shops/:shopId/roles/sync', async (req, res) => {
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Proxy error';
     console.error('[Roles Proxy] Error forwarding to', targetUrl, message);
+    res.status(502).json({
+      success: false,
+      error: message,
+    });
+  }
+});
+
+/**
+ * Passthrough a https://www.bizneai.com/api/... (waitlist, etc.).
+ * GET/POST /api/proxy/bizneai/waitlist?shopId= → https://www.bizneai.com/api/waitlist?shopId=
+ * El cliente POS usa esto en localhost/Electron para evitar CORS; el upstream sigue siendo www.bizneai.com.
+ */
+router.use('/bizneai', async (req, res) => {
+  const suffix = req.url.startsWith('/') ? req.url : `/${req.url}`;
+  const targetUrl = `${BIZNEAI_ORIGIN}/api${suffix}`;
+
+  try {
+    const response = await axios({
+      method: req.method as 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
+      url: targetUrl,
+      data: ['GET', 'HEAD', 'OPTIONS'].includes(req.method) ? undefined : req.body,
+      headers: {
+        'Content-Type': (req.headers['content-type'] as string) || 'application/json',
+        Accept: 'application/json',
+      },
+      timeout: 30000,
+      validateStatus: () => true,
+    });
+
+    res.status(response.status).json(response.data);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Proxy error';
+    console.error('[BizneAI API passthrough] Error forwarding to', targetUrl, message);
     res.status(502).json({
       success: false,
       error: message,

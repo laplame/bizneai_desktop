@@ -21,12 +21,37 @@ import {
   ArrowUpDown,
   Package,
   ChefHat,
-  CheckSquare
+  CheckSquare,
+  Printer
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { waitlistAPI } from '../api/waitlist';
 import { useStore } from '../contexts/StoreContext';
 import { scheduleMirrorKeyToSqlite } from '../services/posPersistService';
+import { printReceiptThermalOrDialog, resolveStoreNameForPrint } from '../services/receiptPrintService';
+import type { ReceiptPrintData } from '../services/receiptPrintService';
+import type { SaleFulfillmentState } from '../types/saleWaitlistCredit';
+import { releaseWaitlistReservation } from '../services/waitlistInventory';
+import {
+  dedupeWaitlistRowsById,
+  filterStaleMarketingWaitlistRows,
+  mergeWaitlistEntries,
+} from '../utils/waitlistMerge';
+import { getShopId } from '../utils/shopIdHelper';
+
+/** Shop para API waitlist: contexto primero, luego config MCP (muchas tiendas tienen shopId pero _id vacío). */
+function resolveWaitlistShopId(si: { _id: string | null; shopId: string | null }): string | null {
+  const a = si._id?.trim();
+  const b = si.shopId?.trim();
+  if (a) return a;
+  if (b) return b;
+  return getShopId();
+}
+
+/** Pestaña "Lista de espera": no-online (local o sin source del API). */
+function isWaitlistLocalTabEntry(e: { source?: string }): boolean {
+  return e.source !== 'online';
+}
 
 interface WaitlistItem {
   product: {
@@ -44,13 +69,20 @@ interface WaitlistEntry {
   name: string;
   items: WaitlistItem[];
   total: number;
-  source: 'local' | 'online';
-  status: 'waiting' | 'completed'; // Solo waiting y completed, sin preparing/ready (esos son de cocina)
+  /** Si el API omite el campo, se trata como lista local (no online). */
+  source?: 'local' | 'online';
+  /** API puede enviar preparing/ready además de waiting/completed */
+  status: 'waiting' | 'completed' | 'preparing' | 'ready' | string;
   notes?: string;
+  /** Ciclo venta: reserva inventario → pendiente de cobro → completado. */
+  fulfillmentState?: SaleFulfillmentState;
+  /** Cliente del registro (POS), si se conoce. */
+  customerId?: number;
   customerInfo?: {
     name: string;
     phone?: string;
     email?: string;
+    customerId?: number;
   };
   timestamp: string;
   partySize?: number;
@@ -61,6 +93,23 @@ interface WaitlistProps {
   isOpen: boolean;
   onClose: () => void;
   onLoadToCart?: (entry: WaitlistEntry) => void;
+}
+
+function readWaitlistFromStorage(): WaitlistEntry[] {
+  try {
+    const saved = localStorage.getItem('bizneai-waitlist');
+    if (!saved) return [];
+    const parsed = JSON.parse(saved);
+    const arr = Array.isArray(parsed) ? (parsed as WaitlistEntry[]) : [];
+    const cleaned = filterStaleMarketingWaitlistRows(arr);
+    if (cleaned.length !== arr.length) {
+      localStorage.setItem('bizneai-waitlist', JSON.stringify(cleaned));
+      scheduleMirrorKeyToSqlite('bizneai-waitlist');
+    }
+    return cleaned;
+  } catch {
+    return [];
+  }
 }
 
 type StatusFilter = 'all' | 'waiting' | 'completed'; // Solo waiting y completed
@@ -90,37 +139,8 @@ const Waitlist: React.FC<WaitlistProps> = ({ isOpen, onClose, onLoadToCart }) =>
 
   // Define loadLocalWaitlist first
   const loadLocalWaitlist = React.useCallback(() => {
-    const saved = localStorage.getItem('bizneai-waitlist');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        setEntries(parsed);
-      } catch (error) {
-        console.error('Error loading local waitlist:', error);
-        setEntries([]);
-      }
-    } else {
-      setEntries([]);
-    }
+    setEntries(readWaitlistFromStorage());
   }, []);
-
-  // Load waitlist entries when component opens
-  useEffect(() => {
-    if (isOpen) {
-      loadWaitlistEntries();
-    }
-  }, [isOpen]);
-
-  // Force reload when waitlist is opened (in case new entries were added)
-  useEffect(() => {
-    if (isOpen) {
-      // Small delay to ensure localStorage is updated
-      const timer = setTimeout(() => {
-        loadLocalWaitlist();
-      }, 100);
-      return () => clearTimeout(timer);
-    }
-  }, [isOpen, loadLocalWaitlist]);
 
   // Listen for waitlist updates from localStorage
   useEffect(() => {
@@ -159,14 +179,22 @@ const Waitlist: React.FC<WaitlistProps> = ({ isOpen, onClose, onLoadToCart }) =>
       );
     }
 
-    // Status filter
+    // Status filter (servidor puede usar preparing/ready como “en curso”)
     if (statusFilter !== 'all') {
-      filtered = filtered.filter(entry => entry.status === statusFilter);
+      filtered = filtered.filter((entry) => {
+        const st = String(entry.status);
+        if (statusFilter === 'completed') return st === 'completed';
+        return st !== 'completed';
+      });
     }
 
-    // Source filter
+    // Source filter: “local” = no explícitamente online
     if (sourceFilter !== 'all') {
-      filtered = filtered.filter(entry => entry.source === sourceFilter);
+      if (sourceFilter === 'local') {
+        filtered = filtered.filter((entry) => isWaitlistLocalTabEntry(entry));
+      } else {
+        filtered = filtered.filter((entry) => entry.source === 'online');
+      }
     }
 
     // Sort
@@ -198,44 +226,73 @@ const Waitlist: React.FC<WaitlistProps> = ({ isOpen, onClose, onLoadToCart }) =>
     setFilteredEntries(filtered);
   }, [entries, searchTerm, statusFilter, sourceFilter, sortBy, sortOrder]);
 
-  const loadWaitlistEntries = async () => {
+  const loadWaitlistEntries = React.useCallback(async () => {
     setIsLoading(true);
     try {
-      // Primero intentar cargar desde localStorage (más rápido)
-      loadLocalWaitlist();
-      
-      // Luego intentar sincronizar con servidor si hay storeId
-      if (storeIdentifiers._id) {
+      const localEntries = readWaitlistFromStorage();
+      setEntries(localEntries);
+
+      const shopId = resolveWaitlistShopId(storeIdentifiers);
+      if (shopId) {
         try {
-          const response = await waitlistAPI.getWaitlistEntries(storeIdentifiers._id, {
-            page: 1,
-            limit: 100
-          });
-          
-          if (response.success && response.data && response.data.length > 0) {
-            // Filtrar y mapear entradas para que solo tengan status 'waiting' o 'completed'
-            const filteredEntries = response.data
-              .filter((entry: any) => entry.status === 'waiting' || entry.status === 'completed')
-              .map((entry: any) => ({
-                ...entry,
-                status: entry.status as 'waiting' | 'completed'
-              }));
-            setEntries(filteredEntries);
-            // Guardar también en localStorage
-            localStorage.setItem('bizneai-waitlist', JSON.stringify(filteredEntries));
+          const [entriesRes, ordersRes, completedRes] = await Promise.all([
+            waitlistAPI.getWaitlistEntries(shopId, { page: 1, limit: 200 }).catch((err) => {
+              console.warn('[Waitlist] GET /waitlist/entries', err);
+              return { success: false as const, data: [] as unknown[] };
+            }),
+            waitlistAPI.getWaitlistOrders({ shopId, page: 1, limit: 200 }).catch((err) => {
+              console.warn('[Waitlist] GET /waitlist/orders', err);
+              return { success: false as const, data: [] as unknown[] };
+            }),
+            waitlistAPI
+              .getWaitlistEntriesByStatus(shopId, 'completed', { page: 1, limit: 200 })
+              .catch((err) => {
+                console.warn('[Waitlist] GET /waitlist/entries/status/completed', err);
+                return { success: false as const, data: [] as unknown[] };
+              }),
+          ]);
+
+          const remoteChunks: unknown[] = [];
+          if (entriesRes.success && Array.isArray(entriesRes.data)) {
+            remoteChunks.push(...entriesRes.data);
+          }
+          if (ordersRes.success && Array.isArray(ordersRes.data)) {
+            remoteChunks.push(...ordersRes.data);
+          }
+          if (completedRes.success && Array.isArray(completedRes.data)) {
+            remoteChunks.push(...completedRes.data);
+          }
+
+          const dedupedRemote = dedupeWaitlistRowsById(remoteChunks as { _id?: string; status?: unknown }[]);
+          const anyOk = entriesRes.success || ordersRes.success || completedRes.success;
+
+          if (anyOk) {
+            const merged = mergeWaitlistEntries(localEntries, dedupedRemote) as WaitlistEntry[];
+            setEntries(merged);
+            localStorage.setItem('bizneai-waitlist', JSON.stringify(merged));
             scheduleMirrorKeyToSqlite('bizneai-waitlist');
           }
         } catch (error) {
           console.error('Error loading from server, using local:', error);
-          // Ya cargamos desde local, no hay problema
         }
+      } else {
+        console.warn(
+          '[Waitlist] Sin shopId resoluble (_id/shopId en tienda o bizneai-server-config). Solo se muestran datos locales.'
+        );
       }
     } catch (error) {
       console.error('Error loading waitlist:', error);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [storeIdentifiers._id, storeIdentifiers.shopId]);
+
+  // Al abrir el modal: pedir entradas + pedidos + completados y fusionar estado (p. ej. cobro en otro dispositivo)
+  useEffect(() => {
+    if (isOpen) {
+      void loadWaitlistEntries();
+    }
+  }, [isOpen, loadWaitlistEntries]);
 
   const saveLocalWaitlist = (newEntries: WaitlistEntry[]) => {
     localStorage.setItem('bizneai-waitlist', JSON.stringify(newEntries));
@@ -248,8 +305,9 @@ const Waitlist: React.FC<WaitlistProps> = ({ isOpen, onClose, onLoadToCart }) =>
       return;
     }
 
-    if (!storeIdentifiers._id) {
-      toast.error('No hay tienda configurada');
+    const shopIdForEntry = resolveWaitlistShopId(storeIdentifiers);
+    if (!shopIdForEntry) {
+      toast.error('Configura el Shop ID en Configuración para usar la lista de espera');
       return;
     }
 
@@ -257,7 +315,7 @@ const Waitlist: React.FC<WaitlistProps> = ({ isOpen, onClose, onLoadToCart }) =>
     try {
       const newEntry: WaitlistEntry = {
         _id: `waitlist_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-        shopId: storeIdentifiers._id,
+        shopId: shopIdForEntry,
         name: customerName,
         items: [],
         total: 0,
@@ -281,7 +339,7 @@ const Waitlist: React.FC<WaitlistProps> = ({ isOpen, onClose, onLoadToCart }) =>
           phoneNumber: phoneNumber || '',
           partySize,
           estimatedWaitTime,
-          shopId: storeIdentifiers._id
+          shopId: shopIdForEntry
         });
         
         if (response.success && response.data) {
@@ -340,12 +398,55 @@ const Waitlist: React.FC<WaitlistProps> = ({ isOpen, onClose, onLoadToCart }) =>
 
   const handleDeleteEntry = (entryId: string) => {
     if (window.confirm('¿Estás seguro de que quieres eliminar esta entrada de la lista de espera?')) {
+      try {
+        const raw = localStorage.getItem('bizneai-products');
+        const parsed = raw ? JSON.parse(raw) : [];
+        if (Array.isArray(parsed)) {
+          releaseWaitlistReservation(parsed, entryId);
+        }
+      } catch {
+        /* ignore */
+      }
       setEntries(prev => {
         const updated = prev.filter(entry => entry._id !== entryId);
         saveLocalWaitlist(updated);
         return updated;
       });
       toast.success('Entrada eliminada');
+    }
+  };
+
+  const handlePrintEntry = async (entry: WaitlistEntry) => {
+    const lines = (entry.items || []).map((item) => ({
+      productName: item.product.name,
+      quantity: item.quantity,
+      unitPrice: item.product.price,
+      totalPrice: item.product.price * item.quantity,
+    }));
+    if (entry.notes?.trim()) {
+      lines.push({
+        productName: `Nota: ${entry.notes.trim()}`,
+        quantity: 1,
+        unitPrice: 0,
+        totalPrice: 0,
+      });
+    }
+    const printData: ReceiptPrintData = {
+      storeName: resolveStoreNameForPrint(),
+      saleId: `LE-${entry._id.replace(/^waitlist_/, '').slice(0, 14)}`,
+      date: new Date(entry.timestamp).toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' }),
+      items: lines.length > 0 ? lines : [{ productName: '(Sin artículos)', quantity: 1, unitPrice: 0, totalPrice: 0 }],
+      subtotal: entry.total,
+      tax: 0,
+      total: entry.total,
+      paymentMethod: 'Lista de espera',
+      ticketKind: 'catalog',
+    };
+    const r = await printReceiptThermalOrDialog(printData, { forceInteractive: true });
+    if (r.success) {
+      toast.success('Listo para imprimir');
+    } else if (r.error) {
+      toast.error(r.error);
     }
   };
 
@@ -361,6 +462,8 @@ const Waitlist: React.FC<WaitlistProps> = ({ isOpen, onClose, onLoadToCart }) =>
   const getStatusColor = (status: WaitlistEntry['status']) => {
     switch (status) {
       case 'waiting':
+      case 'preparing':
+      case 'ready':
         return '#f59e0b';
       case 'completed':
         return '#64748b';
@@ -373,18 +476,37 @@ const Waitlist: React.FC<WaitlistProps> = ({ isOpen, onClose, onLoadToCart }) =>
     switch (status) {
       case 'waiting':
         return 'En Espera';
+      case 'preparing':
+        return 'Preparando';
+      case 'ready':
+        return 'Listo';
       case 'completed':
         return 'Completado';
       default:
-        return status;
+        return String(status);
     }
   };
 
-  // Statistics - Solo waiting y completed
+  const fulfillmentLabel = (s?: SaleFulfillmentState) => {
+    switch (s) {
+      case 'waitlist_reserved':
+        return 'Inventario reservado';
+      case 'pending_settlement':
+        return 'En cobro (carrito)';
+      case 'completed':
+        return 'Venta cerrada';
+      default:
+        return '';
+    }
+  };
+
+  const isCompletedStatus = (s: string) => s === 'completed';
+
+  // Estadísticas: el API puede usar preparing/ready como “en curso”
   const stats = {
     total: entries.length,
-    waiting: entries.filter(e => e.status === 'waiting').length,
-    completed: entries.filter(e => e.status === 'completed').length
+    waiting: entries.filter((e) => !isCompletedStatus(String(e.status))).length,
+    completed: entries.filter((e) => isCompletedStatus(String(e.status))).length
   };
 
   // Función para renderizar tarjeta de waitlist
@@ -399,10 +521,26 @@ const Waitlist: React.FC<WaitlistProps> = ({ isOpen, onClose, onLoadToCart }) =>
           >
             {getStatusLabel(entry.status)}
           </span>
+          {entry.fulfillmentState && (
+            <span className="status-badge" style={{ background: '#33415520', color: '#94a3b8', fontSize: '0.75rem' }}>
+              {fulfillmentLabel(entry.fulfillmentState)}
+            </span>
+          )}
         </div>
         <div className="waitlist-card-actions">
+          <button
+            type="button"
+            className="icon-btn-small"
+            onClick={() => void handlePrintEntry(entry)}
+            title="Imprimir ticket"
+            aria-label="Imprimir ticket de lista de espera"
+            style={{ color: '#94a3b8' }}
+          >
+            <Printer size={16} />
+          </button>
           {entry.items && entry.items.length > 0 && (
             <button
+              type="button"
               className="icon-btn-small"
               onClick={() => handleLoadToCart(entry)}
               title="Cargar al carrito"
@@ -412,6 +550,7 @@ const Waitlist: React.FC<WaitlistProps> = ({ isOpen, onClose, onLoadToCart }) =>
             </button>
           )}
           <button
+            type="button"
             className="icon-btn-small"
             onClick={() => handleDeleteEntry(entry._id)}
             title="Eliminar"
@@ -499,6 +638,7 @@ const Waitlist: React.FC<WaitlistProps> = ({ isOpen, onClose, onLoadToCart }) =>
         </div>
         {entry.items && entry.items.length > 0 && (
           <button
+            type="button"
             className="btn-primary"
             onClick={() => handleLoadToCart(entry)}
             style={{ marginTop: '0.5rem', width: '100%' }}
@@ -517,7 +657,12 @@ const Waitlist: React.FC<WaitlistProps> = ({ isOpen, onClose, onLoadToCart }) =>
     <div className="waitlist-overlay">
       <div className="waitlist-modal">
         <div className="waitlist-header">
-          <h2>Lista de Espera</h2>
+          <div className="waitlist-header-titles">
+            <h2>Lista de Espera</h2>
+            <p className="waitlist-view-hint">
+              Vista detallada: productos, importes y contacto. Cocina muestra solo estado del servicio y reloj para agilizar preparación.
+            </p>
+          </div>
           <div className="header-actions">
             <button className="action-btn" onClick={loadWaitlistEntries} title="Actualizar">
               <RefreshCw size={20} />
@@ -640,8 +785,8 @@ const Waitlist: React.FC<WaitlistProps> = ({ isOpen, onClose, onLoadToCart }) =>
                 <p>Cargando lista de espera...</p>
               </div>
             ) : activeTab === 'waitlist' ? (
-              // Vista de Lista de Espera Local
-              filteredEntries.filter(e => e.source === 'local').length === 0 ? (
+              // Lista de espera: local o entradas del API sin source online
+              filteredEntries.filter(isWaitlistLocalTabEntry).length === 0 ? (
                 <div className="empty-state">
                   <Clock size={48} style={{ opacity: 0.5 }} />
                   <h3>No hay entradas en la lista de espera</h3>
@@ -653,7 +798,7 @@ const Waitlist: React.FC<WaitlistProps> = ({ isOpen, onClose, onLoadToCart }) =>
                 </div>
               ) : (
                 <div className="waitlist-grid">
-                  {filteredEntries.filter(e => e.source === 'local').map(entry => (
+                  {filteredEntries.filter(isWaitlistLocalTabEntry).map((entry) => (
                     renderWaitlistCard(entry)
                   ))}
                 </div>

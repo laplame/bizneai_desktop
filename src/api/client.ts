@@ -1,7 +1,34 @@
 // API Client Core
 // Centralized API request handling for BizneAI
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
+/**
+ * Base `/api` para fetch JSON.
+ * - `VITE_API_URL` si está definido (p. ej. `http://localhost:3000/api` en dev con API local).
+ * - Si no: origen desde `bizneai-server-config` (serverUrl / mcpUrl).
+ * - Por defecto: producción `https://www.bizneai.com/api` (el waitlist real vive ahí; el default
+ *   anterior `localhost:3000` dejaba la lista vacía si no corría el mock local).
+ */
+export function getApiBaseUrl(): string {
+  const fromEnv = import.meta.env.VITE_API_URL;
+  if (typeof fromEnv === 'string' && fromEnv.trim()) {
+    return fromEnv.trim().replace(/\/$/, '');
+  }
+  try {
+    const raw = localStorage.getItem('bizneai-server-config');
+    if (raw) {
+      const c = JSON.parse(raw) as { serverUrl?: string; mcpUrl?: string };
+      if (c.serverUrl) {
+        return `${new URL(c.serverUrl).origin}/api`;
+      }
+      if (c.mcpUrl) {
+        return `${new URL(c.mcpUrl).origin}/api`;
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return 'https://www.bizneai.com/api';
+}
 
 export interface ApiResponse<T = any> {
   success: boolean;
@@ -25,7 +52,9 @@ export interface SortParams {
  * Generic API request function
  */
 async function apiRequest<T>(endpoint: string, options: RequestInit = {}): Promise<ApiResponse<T>> {
-  const url = `${API_BASE_URL}${endpoint}`;
+  const base = getApiBaseUrl();
+  const path = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+  const url = `${base}${path}`;
   
   const defaultOptions: RequestInit = {
     headers: {
@@ -50,7 +79,9 @@ async function apiRequest<T>(endpoint: string, options: RequestInit = {}): Promi
  * File upload function for multipart/form-data
  */
 async function uploadFiles<T>(endpoint: string, files: File[], additionalData: Record<string, any> = {}): Promise<ApiResponse<T>> {
-  const url = `${API_BASE_URL}${endpoint}`;
+  const base = getApiBaseUrl();
+  const path = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+  const url = `${base}${path}`;
   
   const formData = new FormData();
   
@@ -76,6 +107,24 @@ async function uploadFiles<T>(endpoint: string, files: File[], additionalData: R
     console.error('File upload failed:', error);
     throw new Error(`File upload failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
+}
+
+/**
+ * Respuesta JSON sin asumir `{ success, data }` (p. ej. GET /waitlist en producción devuelve `{ entries }`).
+ */
+export async function apiRequestRaw(endpoint: string, options: RequestInit = {}): Promise<unknown> {
+  const base = getApiBaseUrl();
+  const path = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+  const url = `${base}${path}`;
+  const defaultOptions: RequestInit = {
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    ...options,
+  };
+  const response = await fetch(url, defaultOptions);
+  return response.json();
 }
 
 export { apiRequest, uploadFiles }; 

@@ -3,6 +3,11 @@ import { z } from 'zod';
 
 const router = express.Router();
 
+/**
+ * Rutas fijas (/entries, /entries/source/..., /orders, …) deben declararse ANTES de cualquier
+ * patrón tipo GET /:email (waitlist marketing) para que "entries" no se interprete como email.
+ */
+
 // Waitlist schemas
 const addToWaitlistSchema = z.object({
   name: z.string().min(1, 'Name is required').max(100),
@@ -50,7 +55,7 @@ const onlineOrderSchema = z.object({
 const waitlistQuerySchema = z.object({
   shopId: z.string().min(1, 'Shop ID is required'),
   page: z.string().transform(Number).pipe(z.number().min(1)).default('1'),
-  limit: z.string().transform(Number).pipe(z.number().min(1).max(100)).default('20'),
+  limit: z.string().transform(Number).pipe(z.number().min(1).max(500)).default('20'),
   source: z.enum(['local', 'online']).optional(),
   status: z.enum(['waiting', 'preparing', 'ready', 'completed']).optional(),
   search: z.string().optional(),
@@ -58,29 +63,53 @@ const waitlistQuerySchema = z.object({
   sortOrder: z.enum(['asc', 'desc']).default('desc')
 });
 
-// Mock data for development
-let waitlistEntries = [
-  {
-    _id: '64f8a1b2c3d4e5f6',
-    shopId: '688526630b5dfbfe4fabacea',
-    name: 'Test Customer',
-    items: [{
-      product: {
-        id: '1',
-        name: 'Test Item',
-        price: 12,
-        category: 'test'
-      },
-      quantity: 1
-    }],
-    total: 12,
-    source: 'local',
-    status: 'waiting',
-    timestamp: '2025-07-26T19:30:00.000Z',
-    createdAt: '2025-07-26T19:30:00.000Z',
-    updatedAt: '2025-07-26T19:30:00.000Z'
+type ParsedWaitlistQuery = z.infer<typeof waitlistQuerySchema>;
+
+function paginateWaitlistForShop(query: ParsedWaitlistQuery) {
+  let filteredEntries = waitlistEntries.filter((entry) => entry.shopId === query.shopId);
+
+  if (query.source) {
+    filteredEntries = filteredEntries.filter((entry) => entry.source === query.source);
   }
-];
+
+  if (query.status) {
+    filteredEntries = filteredEntries.filter((entry) => entry.status === query.status);
+  }
+
+  if (query.search) {
+    filteredEntries = filteredEntries.filter((entry) =>
+      entry.name.toLowerCase().includes(query.search!.toLowerCase())
+    );
+  }
+
+  filteredEntries.sort((a, b) => {
+    const aValue = a[query.sortBy as keyof typeof a];
+    const bValue = b[query.sortBy as keyof typeof b];
+
+    if (query.sortOrder === 'asc') {
+      return aValue > bValue ? 1 : -1;
+    }
+    return aValue < bValue ? 1 : -1;
+  });
+
+  const startIndex = (query.page - 1) * query.limit;
+  const paginatedEntries = filteredEntries.slice(startIndex, startIndex + query.limit);
+  const total = filteredEntries.length;
+  const pages = Math.ceil(total / query.limit) || 1;
+
+  return {
+    paginatedEntries,
+    pagination: {
+      current: query.page,
+      pages,
+      total,
+      limit: query.limit
+    }
+  };
+}
+
+/** En memoria solo para API local; sin datos semilla. */
+let waitlistEntries: any[] = [];
 
 // 1. Add Item to Shop Waitlist
 router.post('/shop/:shopId', async (req, res) => {
@@ -125,57 +154,15 @@ router.post('/shop/:shopId', async (req, res) => {
   }
 });
 
-// 2. Get Waitlist Entries
+// 2. GET /api/waitlist/entries?shopId=... — Listar entradas (paginación, source, status, search)
 router.get('/entries', async (req, res) => {
   try {
     const query = waitlistQuerySchema.parse(req.query);
-    
-    let filteredEntries = waitlistEntries.filter(entry => entry.shopId === query.shopId);
-    
-    // Apply filters
-    if (query.source) {
-      filteredEntries = filteredEntries.filter(entry => entry.source === query.source);
-    }
-    
-    if (query.status) {
-      filteredEntries = filteredEntries.filter(entry => entry.status === query.status);
-    }
-    
-    if (query.search) {
-      filteredEntries = filteredEntries.filter(entry => 
-        entry.name.toLowerCase().includes(query.search!.toLowerCase())
-      );
-    }
-    
-    // Apply sorting
-    filteredEntries.sort((a, b) => {
-      const aValue = a[query.sortBy as keyof typeof a];
-      const bValue = b[query.sortBy as keyof typeof b];
-      
-      if (query.sortOrder === 'asc') {
-        return aValue > bValue ? 1 : -1;
-      } else {
-        return aValue < bValue ? 1 : -1;
-      }
-    });
-    
-    // Apply pagination
-    const startIndex = (query.page - 1) * query.limit;
-    const endIndex = startIndex + query.limit;
-    const paginatedEntries = filteredEntries.slice(startIndex, endIndex);
-    
-    const total = filteredEntries.length;
-    const pages = Math.ceil(total / query.limit);
-    
+    const { paginatedEntries, pagination } = paginateWaitlistForShop(query);
     res.json({
       success: true,
       data: paginatedEntries,
-      pagination: {
-        current: query.page,
-        pages,
-        total,
-        limit: query.limit
-      }
+      pagination
     });
   } catch (error) {
     if (error instanceof z.ZodError) {
@@ -189,6 +176,118 @@ router.get('/entries', async (req, res) => {
       success: false,
       error: 'Failed to fetch waitlist entries'
     });
+  }
+});
+
+// 2a. GET /entries/source/:source?shopId=... — Misma lógica que ?source= (ruta fija antes de /entries/:id)
+router.get('/entries/source/:source', async (req, res) => {
+  try {
+    const source = z.enum(['local', 'online']).parse(req.params.source);
+    const query = waitlistQuerySchema.parse({ ...req.query, source });
+    const { paginatedEntries, pagination } = paginateWaitlistForShop(query);
+    res.json({ success: true, data: paginatedEntries, pagination });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({
+        success: false,
+        error: 'Validation error',
+        details: error.errors
+      });
+    }
+    res.status(500).json({ success: false, error: 'Failed to fetch waitlist entries by source' });
+  }
+});
+
+// 2b. GET /entries/status/:status?shopId=...
+router.get('/entries/status/:status', async (req, res) => {
+  try {
+    const status = z.enum(['waiting', 'preparing', 'ready', 'completed']).parse(req.params.status);
+    const query = waitlistQuerySchema.parse({ ...req.query, status });
+    const { paginatedEntries, pagination } = paginateWaitlistForShop(query);
+    res.json({ success: true, data: paginatedEntries, pagination });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({
+        success: false,
+        error: 'Validation error',
+        details: error.errors
+      });
+    }
+    res.status(500).json({ success: false, error: 'Failed to fetch waitlist entries by status' });
+  }
+});
+
+// 2c. GET /entries/:id?shopId=... — Una entrada (rutas /source y /status van antes para no capturar "source" como id)
+router.get('/entries/:id', async (req, res) => {
+  try {
+    const { id } = z.object({ id: z.string().min(1) }).parse(req.params);
+    const shopId = z.string().min(1).parse(req.query.shopId);
+    const entry = waitlistEntries.find((e) => e._id === id && e.shopId === shopId);
+    if (!entry) {
+      return res.status(404).json({ success: false, error: 'Waitlist entry not found' });
+    }
+    res.json({ success: true, data: entry });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({
+        success: false,
+        error: 'Validation error',
+        details: error.errors
+      });
+    }
+    res.status(500).json({ success: false, error: 'Failed to fetch waitlist entry' });
+  }
+});
+
+// 2d. GET /orders?shopId=... — Pedidos (mismo almacén; filtros opcionales). Documentación API producción.
+const ordersListQuerySchema = z.object({
+  shopId: z.string().min(1),
+  page: z.coerce.number().min(1).default(1),
+  limit: z.coerce.number().min(1).max(500).default(50),
+  source: z.enum(['local', 'online']).optional(),
+  status: z.string().optional(),
+  customerEmail: z.string().optional()
+});
+
+router.get('/orders', async (req, res) => {
+  try {
+    const q = ordersListQuerySchema.parse(req.query);
+    let filtered = waitlistEntries.filter((e) => e.shopId === q.shopId);
+    if (q.source) {
+      filtered = filtered.filter((e) => e.source === q.source);
+    }
+    if (q.status) {
+      filtered = filtered.filter((e) => e.status === q.status);
+    }
+    if (q.customerEmail) {
+      const em = q.customerEmail.toLowerCase();
+      filtered = filtered.filter((e) => {
+        const ci = e.customerInfo as { email?: string } | undefined;
+        return ci?.email?.toLowerCase().includes(em);
+      });
+    }
+    const start = (q.page - 1) * q.limit;
+    const data = filtered.slice(start, start + q.limit);
+    const total = filtered.length;
+    res.json({
+      success: true,
+      data,
+      pagination: {
+        current: q.page,
+        pages: Math.ceil(total / q.limit) || 1,
+        total,
+        limit: q.limit
+      }
+    });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({
+        success: false,
+        error: 'Validation error',
+        details: error.errors
+      });
+    }
+    res.status(500).json({ success: false, error: 'Failed to fetch orders' });
   }
 });
 

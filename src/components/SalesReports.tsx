@@ -36,7 +36,7 @@ import {
   getLastBlockGeneration,
   verifyChainIntegrityService,
 } from '../services/merkleTreeService';
-import { syncUnsentBlocksToServer } from '../services/blockApiService';
+import { sendLuxaeTelemetryToServer, syncUnsentBlocksToServer } from '../services/blockApiService';
 import { getTransactionsFromMcp, isShopIdConfigured } from '../utils/shopIdHelper';
 import { isBatchDue, syncMcpBatch, sleep } from '../utils/syncService';
 import {
@@ -302,7 +302,12 @@ const SalesReports = ({ isOpen, onClose, onRecoverSaleToCart }: SalesReportsProp
         const txCount = newBlock.transactions.length;
         setBlocks(getDailyBlocks());
         setTransactions(getTransactions());
-        toast.success(`Bloque generado para ${date} con ${txCount} transacciones${txCount > 0 ? ' • +50 LUX' : ''}`);
+        const lux = newBlock.luxaeEarned ?? 1;
+        const tier = newBlock.luxaeIntensity === 'high' ? 'alta' : 'baja';
+        toast.success(
+          `Bloque generado para ${date} con ${txCount} transacciones · +${lux} Luxae (intensidad ${tier}, ${newBlock.luxaeRatePerHour ?? 1}/h)`
+        );
+        void sendLuxaeTelemetryToServer().catch(() => {});
         await syncUnsentBlocksToServer();
       }
     } catch (error) {

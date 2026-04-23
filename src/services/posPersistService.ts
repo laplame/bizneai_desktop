@@ -14,6 +14,8 @@ export const KEYS_TO_MIRROR = [
   'bizneai-customers-registry',
   'bizneai-kitchen-orders',
   'bizneai-waitlist',
+  'bizneai-waitlist-inventory-reservations',
+  'bizneai-customer-account-ledger',
   'bizneai-inventory-history',
   'bizneai-tax-rate',
   'bizneai-fiscal-config',
@@ -26,6 +28,8 @@ export const KEYS_TO_MIRROR = [
   'bizneai-roles',
   'bizneai-screen-lock-enabled',
   'bizneai-store-types',
+  'bizneai-pending-sales',
+  'bizneai-inventory-csv-autobackup-day',
 ] as const;
 
 const MIRROR_KEYS_SET = new Set<string>(KEYS_TO_MIRROR);

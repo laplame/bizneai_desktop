@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   Package, 
   Plus, 
@@ -13,7 +13,8 @@ import {
   Download,
   RefreshCw,
   Warehouse,
-  CloudDownload
+  CloudDownload,
+  Layers,
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import {
@@ -22,14 +23,20 @@ import {
   isShopIdConfigured,
   enrichProductsWithImages,
   mergeProductsFromServerPreserveImages,
+  fetchMcpInventoryStatusStockRows,
+  applyMcpInventoryStockRowsToProducts,
 } from '../utils/shopIdHelper';
 import { syncProductImagesToLocalDisk } from '../services/productImageLocalCache';
 import { isSyncDue, isBatchDue, syncMcpBatch } from '../utils/syncService';
 import { shouldShowImage, markImageFailed } from '../utils/imageCache';
 import InventoryManagement from './InventoryManagement';
+import {
+  type ProductComponentRow,
+  getComponentsFromProductRecord,
+} from '../utils/productComponents';
 
 interface Product {
-  id: number;
+  id: number | string;
   name: string;
   description: string;
   price: number;
@@ -46,6 +53,8 @@ interface Product {
   isActive: boolean;
   image?: string;
   tags: string[];
+  /** Insumos / BOM / receta (MCP o local). */
+  components?: ProductComponentRow[];
   createdAt: string;
   updatedAt: string;
 }
@@ -54,8 +63,19 @@ interface ProductManagementProps {
   isOpen: boolean;
   onClose: () => void;
   initialView?: 'list' | 'grid' | 'analytics' | 'inventory';
-  restockProduct?: { id: number; name: string } | null;
+  restockProduct?: { id: number | string; name: string } | null;
   onRestockComplete?: (productToAdd?: unknown) => void;
+}
+
+/** Nuevo id numérico para altas locales cuando el catálogo mezcla ids string (MCP) y numéricos. */
+function nextLocalNumericProductId(products: Product[]): number {
+  let max = 0;
+  for (const p of products) {
+    if (typeof p.id === 'number' && Number.isFinite(p.id)) {
+      max = Math.max(max, p.id);
+    }
+  }
+  return max + 1;
 }
 
 const categories = ['Bebidas', 'Panadería', 'Comida', 'Postres', 'Snacks', 'Bebidas Alcohólicas', 'Otros'];
@@ -82,6 +102,10 @@ const generateSampleProducts = (): Product[] => {
       location: 'Estante A1',
       isActive: true,
       tags: ['café', 'bebida caliente', 'tradicional'],
+      components: [
+        { name: 'Café molido', quantity: 18, unit: 'g' },
+        { name: 'Agua filtrada', quantity: 180, unit: 'ml' },
+      ],
       createdAt: '2024-01-15T10:00:00Z',
       updatedAt: '2024-01-15T10:00:00Z'
     },
@@ -181,6 +205,8 @@ const ProductManagement = ({ isOpen, onClose, initialView, restockProduct, onRes
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [editingProduct, setEditingProduct] = useState<Partial<Product>>({});
+  /** Producto resaltado en lista/cuadrícula; panel derecho muestra componentes. */
+  const [panelProductId, setPanelProductId] = useState<number | string | null>(null);
   const isLoadingRef = useRef(false);
   const hasLoadedForOpenRef = useRef(false);
   const hasServerDataRef = useRef(false);
@@ -211,8 +237,13 @@ const ProductManagement = ({ isOpen, onClose, initialView, restockProduct, onRes
 
     try {
       toast.loading('Cargando productos desde el servidor...', { id: 'loading-products' });
-      const mcpProducts = await getProductsFromMcp();
-      
+      const [mcpProducts, stockRows] = await Promise.all([getProductsFromMcp(), fetchMcpInventoryStatusStockRows()]);
+
+      const withRemoteStock = (list: Product[]): Product[] => {
+        if (!stockRows?.length) return list;
+        return applyMcpInventoryStockRowsToProducts(list as unknown as Record<string, unknown>[], stockRows) as unknown as Product[];
+      };
+
       if (mcpProducts && mcpProducts.length > 0) {
         hasServerDataRef.current = true;
         const localParsed = loadFromLocalStorage();
@@ -222,22 +253,37 @@ const ProductManagement = ({ isOpen, onClose, initialView, restockProduct, onRes
           unknown
         >[];
         const withLocalImages = (await syncProductImagesToLocalDisk(merged)) as unknown as Product[];
-        setProducts(withLocalImages);
-        setFilteredProducts(withLocalImages);
-        localStorage.setItem('bizneai-products', JSON.stringify(withLocalImages));
+        const finalList = withRemoteStock(withLocalImages);
+        setProducts(finalList);
+        setFilteredProducts(finalList);
+        localStorage.setItem('bizneai-products', JSON.stringify(finalList));
         window.dispatchEvent(new Event('products-updated'));
-        toast.success(`${withLocalImages.length} productos cargados desde el servidor`, { id: 'loading-products' });
+        const stockHint =
+          stockRows && stockRows.length > 0
+            ? ' Stocks actualizados desde inventario (MCP).'
+            : stockRows === null
+              ? ' Inventario MCP no disponible; se usó el stock del catálogo.'
+              : '';
+        toast.success(`${finalList.length} productos cargados desde el servidor.${stockHint}`, { id: 'loading-products' });
       } else {
         const local = loadFromLocalStorage();
         let toUse = local.length > 0 ? local : generateSampleProducts();
         toUse = await enrichProductsWithImages(toUse);
+        toUse = withRemoteStock(toUse);
         setProducts(toUse);
         setFilteredProducts(toUse);
         if (local.length === 0) {
           localStorage.setItem('bizneai-products', JSON.stringify(toUse));
           window.dispatchEvent(new Event('products-updated'));
         }
-        toast.success(local.length > 0 ? 'Usando productos guardados localmente' : 'Mostrando productos de muestra', { id: 'loading-products' });
+        const stockHint =
+          stockRows && stockRows.length > 0
+            ? ' Stocks actualizados desde inventario (MCP).'
+            : '';
+        toast.success(
+          (local.length > 0 ? 'Usando productos guardados localmente' : 'Mostrando productos de muestra') + stockHint,
+          { id: 'loading-products' }
+        );
       }
     } catch (error) {
       console.error('Error loading products from server:', error);
@@ -306,6 +352,25 @@ const ProductManagement = ({ isOpen, onClose, initialView, restockProduct, onRes
     filterProducts();
   }, [products, searchTerm, selectedCategory, stockFilter]);
 
+  useEffect(() => {
+    if (panelProductId == null) return;
+    if (!filteredProducts.some((p) => p.id === panelProductId)) {
+      setPanelProductId(null);
+    }
+  }, [filteredProducts, panelProductId]);
+
+  const panelProduct = useMemo(
+    () => (panelProductId == null ? null : products.find((p) => p.id === panelProductId) ?? null),
+    [products, panelProductId]
+  );
+
+  const resolveProductComponents = (product: Product): ProductComponentRow[] => {
+    if (Array.isArray(product.components) && product.components.length > 0) {
+      return product.components;
+    }
+    return getComponentsFromProductRecord(product as unknown as Record<string, unknown>);
+  };
+
   const filterProducts = () => {
     let filtered = [...products];
 
@@ -364,6 +429,55 @@ const ProductManagement = ({ isOpen, onClose, initialView, restockProduct, onRes
     setIsAddModalOpen(true);
   };
 
+  const escapeCsvField = (value: string) => {
+    const s = String(value ?? '');
+    if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+    return s;
+  };
+
+  /** Exportar catálogo actual (memoria de esta ventana / mismo origen que el POS local). */
+  const handleExportCatalogCsv = () => {
+    if (products.length === 0) {
+      toast.error('No hay productos para exportar');
+      return;
+    }
+    const header = [
+      'Nombre',
+      'Descripción',
+      'Categoría',
+      'Stock',
+      'Precio',
+      'Costo',
+      'SKU',
+      'Código de barras',
+      'Unidad',
+      'Activo',
+    ];
+    const rows = products.map((p) =>
+      [
+        p.name,
+        p.description ?? '',
+        p.category,
+        String(p.stock),
+        String(p.price),
+        String(p.cost ?? ''),
+        p.sku,
+        p.barcode ?? '',
+        p.unit ?? '',
+        p.isActive ? 'Sí' : 'No',
+      ].map((cell) => escapeCsvField(cell))
+    );
+    const csv = [header.join(','), ...rows.map((r) => r.join(','))].join('\n');
+    const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `catalogo-productos-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success('Catálogo exportado a CSV');
+  };
+
   const handleEditProduct = (product: Product) => {
     setSelectedProduct(product);
     setEditingProduct({ ...product });
@@ -380,7 +494,7 @@ const ProductManagement = ({ isOpen, onClose, initialView, restockProduct, onRes
     if (isAddModalOpen) {
       const newProduct: Product = {
         ...editingProduct as Product,
-        id: products.length > 0 ? Math.max(...products.map(p => p.id)) + 1 : 1,
+        id: nextLocalNumericProductId(products),
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
@@ -400,16 +514,17 @@ const ProductManagement = ({ isOpen, onClose, initialView, restockProduct, onRes
     setEditingProduct({});
   };
 
-  const handleDeleteProduct = (productId: number) => {
+  const handleDeleteProduct = (productId: number | string) => {
     if (confirm('¿Estás seguro de que quieres eliminar este producto?')) {
       const updatedProducts = products.filter(p => p.id !== productId);
       setProducts(updatedProducts);
+      if (panelProductId === productId) setPanelProductId(null);
       localStorage.setItem('bizneai-products', JSON.stringify(updatedProducts));
       window.dispatchEvent(new Event('products-updated'));
     }
   };
 
-  const handleStockUpdate = (productId: number, newStock: number) => {
+  const handleStockUpdate = (productId: number | string, newStock: number) => {
     const updatedProducts = products.map(p =>
       p.id === productId ? { ...p, stock: newStock, updatedAt: new Date().toISOString() } : p
     );
@@ -627,8 +742,21 @@ const ProductManagement = ({ isOpen, onClose, initialView, restockProduct, onRes
         <tbody>
           {filteredProducts.map(product => {
             const stockStatus = getStockStatus(product);
+            const isRowSelected = panelProductId === product.id;
             return (
-              <tr key={product.id}>
+              <tr
+                key={product.id}
+                className={isRowSelected ? 'is-selected' : undefined}
+                onClick={() => setPanelProductId(product.id)}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    setPanelProductId(product.id);
+                  }
+                }}
+              >
                 <td>
                   <div className="product-info">
                     <div className="product-image">
@@ -678,7 +806,7 @@ const ProductManagement = ({ isOpen, onClose, initialView, restockProduct, onRes
                   </span>
                 </td>
                 <td>
-                  <div className="action-buttons">
+                  <div className="action-buttons" onClick={(e) => e.stopPropagation()}>
                     <button className="action-btn" onClick={() => handleEditProduct(product)} title="Editar">
                       <Edit size={16} />
                     </button>
@@ -699,8 +827,21 @@ const ProductManagement = ({ isOpen, onClose, initialView, restockProduct, onRes
     <div className="products-grid">
       {filteredProducts.map(product => {
         const stockStatus = getStockStatus(product);
+        const isCardSelected = panelProductId === product.id;
         return (
-          <div key={product.id} className="product-card">
+          <div
+            key={product.id}
+            className={`product-card${isCardSelected ? ' is-selected' : ''}`}
+            onClick={() => setPanelProductId(product.id)}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                setPanelProductId(product.id);
+              }
+            }}
+          >
             <div className="product-card-header">
               <div className="product-image">
                 {shouldShowImage(product.image) ? (
@@ -751,7 +892,7 @@ const ProductManagement = ({ isOpen, onClose, initialView, restockProduct, onRes
               </div>
             </div>
             
-            <div className="product-card-actions">
+            <div className="product-card-actions" onClick={(e) => e.stopPropagation()}>
               <button className="btn-secondary" onClick={() => handleEditProduct(product)}>
                 <Edit size={16} />
                 Editar
@@ -857,6 +998,90 @@ const ProductManagement = ({ isOpen, onClose, initialView, restockProduct, onRes
     );
   };
 
+  const renderComponentsAside = () => {
+    const showListHint = view === 'inventory' || view === 'analytics';
+    const components = panelProduct ? resolveProductComponents(panelProduct) : [];
+    const tags = panelProduct?.tags ?? [];
+
+    return (
+      <aside className="product-components-aside" aria-label="Componentes del producto">
+        <div className="product-components-aside-header">
+          <Layers size={18} aria-hidden />
+          <span>Componentes</span>
+        </div>
+        {showListHint && (
+          <p className="product-components-hint">
+            En <strong>Lista</strong> o <strong>Cuadrícula</strong>, haz clic en un producto para ver insumos o receta aquí.
+          </p>
+        )}
+        {!panelProduct ? (
+          <p className="product-components-empty">
+            {showListHint
+              ? 'Selecciona un producto en Lista o Cuadrícula para ver sus componentes aquí.'
+              : 'Selecciona un producto en la tabla o en la cuadrícula.'}
+          </p>
+        ) : (
+          <>
+            <div className="product-components-product-title">{panelProduct.name}</div>
+            <div className="product-components-badges">
+              <span className="category-badge">{panelProduct.category}</span>
+              {panelProduct.sku ? <span className="sku-muted">{panelProduct.sku}</span> : null}
+            </div>
+            {components.length === 0 ? (
+              <div className="product-components-empty">
+                <p>Sin componentes definidos.</p>
+                {tags.length > 0 && (
+                  <div className="product-components-tags">
+                    <span className="micro-label">Etiquetas</span>
+                    <div className="tag-chips">
+                      {tags.map((t) => (
+                        <span key={t} className="tag-chip">
+                          {t}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <ul className="product-components-list">
+                {components.map((c, i) => (
+                  <li key={`${String(c.name)}-${i}`}>
+                    <span className="component-name">{c.name}</span>
+                    {(c.quantity != null || c.unit) && (
+                      <span className="component-qty">
+                        {c.quantity != null ? String(c.quantity) : ''}
+                        {c.unit ? ` ${c.unit}` : ''}
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </>
+        )}
+      </aside>
+    );
+  };
+
+  const tooltipSyncFromServer =
+    'Sincronizar desde el servidor (icono de nube / MCP): descarga el catálogo oficial de tu tienda en BizneAI, lo fusiona con lo que ya tienes guardado en este equipo (p. ej. conserva imágenes descargadas), trae stocks desde el inventario MCP (inventory/status) cuando existe y guarda el resultado en el almacenamiento local del POS. Requiere conexión e ID de tienda. ' +
+    'No exporta un archivo. No es el botón circular: ese solo relee datos locales sin usar internet.';
+
+  const tooltipRefreshLocal =
+    'Actualizar vista (flechas circulares): vuelve a cargar la tabla desde el catálogo guardado en este equipo (bizneai-products). No usa red ni actualiza el servidor. ' +
+    'Sirve para refrescar lo que ya está en el disco tras cambios en la misma sesión o para re-aplicar imágenes en caché. La nube es la que trae cambios remotos desde MCP.';
+
+  const tooltipExportCsv =
+    'Exportar catálogo (flecha hacia abajo): genera un archivo CSV con los productos cargados ahora en esta ventana (respaldo o análisis en Excel). No sincroniza con el servidor ni sustituye tu lista. ' +
+    'Diferencia con la nube: la nube descarga de BizneAI/MCP; este botón solo saca una copia de lo que ya ves aquí.';
+
+  const tooltipAddProduct =
+    'Agregar producto: abre el formulario para crear un artículo nuevo y guardarlo en el catálogo local del POS (bizneai-products). No descarga del servidor hasta que uses la nube.';
+
+  const tooltipCloseModal =
+    'Cerrar gestión de productos: oculta esta ventana. El catálogo sigue guardado en este equipo; no se pierden los datos al cerrar.';
+
   if (!isOpen) return null;
 
   return (
@@ -866,35 +1091,69 @@ const ProductManagement = ({ isOpen, onClose, initialView, restockProduct, onRes
           <h2>Gestión de Productos</h2>
           <div className="header-actions">
             {isShopIdConfigured() && (
-              <button 
-                className="action-btn" 
-                title="Cargar desde Servidor"
+              <button
+                type="button"
+                className="action-btn"
+                title={tooltipSyncFromServer}
+                aria-label={tooltipSyncFromServer}
                 onClick={loadProductsFromServer}
               >
                 <CloudDownload size={20} />
               </button>
             )}
-            <button className="action-btn" title="Actualizar" onClick={() => {
-              const sampleProducts = generateSampleProducts();
-              setProducts(sampleProducts);
-              setFilteredProducts(sampleProducts);
-            }}>
+            <button
+              type="button"
+              className="action-btn"
+              title={tooltipRefreshLocal}
+              aria-label={tooltipRefreshLocal}
+              onClick={async () => {
+                const local = loadFromLocalStorage();
+                if (local.length > 0) {
+                  try {
+                    const enriched = await enrichProductsWithImages(local);
+                    setProducts(enriched);
+                    setFilteredProducts(enriched);
+                    toast.success('Lista actualizada desde el catálogo guardado en este equipo');
+                  } catch {
+                    setProducts(local);
+                    setFilteredProducts(local);
+                    toast.success('Lista actualizada desde el catálogo local');
+                  }
+                  return;
+                }
+                if (isShopIdConfigured()) {
+                  toast('No hay catálogo local aún. Usa el icono de nube para cargar desde el servidor.', {
+                    icon: 'ℹ️',
+                  });
+                } else {
+                  toast.error('No hay productos guardados. Configura el servidor o agrega productos.');
+                }
+              }}
+            >
               <RefreshCw size={20} />
             </button>
-            <button className="action-btn" title="Exportar">
+            <button
+              type="button"
+              className="action-btn"
+              title={tooltipExportCsv}
+              aria-label={tooltipExportCsv}
+              onClick={handleExportCatalogCsv}
+            >
               <Download size={20} />
             </button>
-            <button className="btn-primary" onClick={handleAddProduct}>
+            <button type="button" className="btn-primary" title={tooltipAddProduct} aria-label={tooltipAddProduct} onClick={handleAddProduct}>
               <Plus size={20} />
               Agregar Producto
             </button>
-            <button className="close-btn" onClick={onClose}>
+            <button type="button" className="close-btn" title={tooltipCloseModal} aria-label={tooltipCloseModal} onClick={onClose}>
               <X size={20} />
             </button>
           </div>
         </div>
 
         <div className="management-content">
+          <div className="management-body">
+            <div className="management-main">
           {/* Filtros y búsqueda */}
           <div className="filters-section">
             <div className="search-box">
@@ -967,9 +1226,13 @@ const ProductManagement = ({ isOpen, onClose, initialView, restockProduct, onRes
                 onStockUpdate={handleStockUpdate}
                 restockProduct={restockProduct ?? undefined}
                 onRestockComplete={onRestockComplete}
+                onPullServerCatalog={loadProductsFromServer}
               />
             )}
             {view === 'analytics' && renderAnalytics()}
+          </div>
+            </div>
+            {renderComponentsAside()}
           </div>
         </div>
       </div>

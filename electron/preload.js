@@ -12,4 +12,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
   pickTicketLogo: () => ipcRenderer.invoke('pick-ticket-logo'),
   removeTicketLogo: () => ipcRenderer.invoke('remove-ticket-logo'),
   ticketLogoDataUrl: (absPath) => ipcRenderer.invoke('ticket-logo-data-url', absPath),
+  writeInventoryBackupCsv: (payload) => ipcRenderer.invoke('write-inventory-backup-csv', payload),
 }); 

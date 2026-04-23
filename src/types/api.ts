@@ -255,6 +255,12 @@ export interface WaitlistEntry {
   notes?: string;
   customerInfo: CustomerInfo;
   timestamp: string;
+  /** API waitlist (Mongoose): estimatedTime en documento. */
+  estimatedTime?: number;
+  /** GET /waitlist/orders (formato app): minutos transcurridos. */
+  elapsedTime?: number;
+  /** GET /waitlist/orders: si la tienda tiene cocina. */
+  hasKitchen?: boolean;
 }
 
 export interface WaitlistItem {
@@ -263,6 +269,8 @@ export interface WaitlistItem {
     name: string;
     price: number;
     category: string;
+    /** WaitlistEntrySchema: URL opcional. */
+    image?: string;
   };
   quantity: number;
 }
@@ -273,13 +281,17 @@ export interface CustomerInfo {
   email?: string;
 }
 
+/** Cuerpo para POST /api/waitlist/shop/:shopId (WaitlistEntrySchema; shopId va en la URL). */
 export interface CreateWaitlistEntryRequest {
   name: string;
   items: WaitlistItem[];
   total: number;
-  source: 'local' | 'online';
+  /** Por defecto en servidor: local */
+  source?: 'local' | 'online';
   notes?: string;
-  customerInfo: CustomerInfo;
+  customerInfo?: CustomerInfo;
+  /** estimatedTime positivo entero (API); distinto de partySize del modal legacy. */
+  estimatedTime?: number;
 }
 
 export interface WaitlistQueryParams extends PaginationParams, SortParams {
