@@ -89,6 +89,7 @@ import {
 } from '../services/receiptPrintService';
 import { syncRolesToServer } from '../api/roles';
 import RolesScreenLockPanel from './RolesScreenLockPanel';
+import { enterKioskMode, isKioskModeActive } from '../hooks/useKioskMode';
 import { getVersionDisplay, BUILD_TIMESTAMP } from '../lib/buildInfo';
 import i18n from '../i18n';
 import type { TaxSettings } from '../utils/taxSettings';
@@ -2336,6 +2337,32 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
         'Roles y bloqueo de pantalla',
         <Users size={20} />,
         <RolesScreenLockPanel />,
+        { alwaysInteractive: true }
+      )}
+
+      {renderSection(
+        'kiosk-mode',
+        'Modo kiosko (autoservicio)',
+        <Lock size={20} />,
+        <div className="settings-form">
+          <p className="settings-hint">
+            Activa la pantalla completa de autoservicio para terminal táctil. Una vez activo,{' '}
+            <strong>no se puede salir sin el passcode de acceso a Configuración</strong>. Para
+            salir, usa el botón de candado que aparece en el POS e ingresa el passcode.
+          </p>
+          {isKioskModeActive() ? (
+            <div className="kiosk-status-active">
+              <Lock size={16} /> Modo kiosko ACTIVO
+            </div>
+          ) : (
+            <button
+              className="btn-primary kiosk-activate-btn"
+              onClick={() => enterKioskMode()}
+            >
+              <Lock size={18} /> Activar modo kiosko autoservicio
+            </button>
+          )}
+        </div>,
         { alwaysInteractive: true }
       )}
 

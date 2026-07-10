@@ -14,7 +14,7 @@ import {
 } from '../mcpRelationalImport.js';
 import { getLocalActivityDb } from '../localActivityDb.js';
 import { ensureBizneaiDataDir, getBizneaiDataDir } from '../dataPaths.js';
-import { getDatabase } from '../../../src/database/database.js';
+import { getDatabase } from '../legacyDb.js';
 
 const router = express.Router();
 

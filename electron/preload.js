@@ -13,4 +13,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
   removeTicketLogo: () => ipcRenderer.invoke('remove-ticket-logo'),
   ticketLogoDataUrl: (absPath) => ipcRenderer.invoke('ticket-logo-data-url', absPath),
   writeInventoryBackupCsv: (payload) => ipcRenderer.invoke('write-inventory-backup-csv', payload),
+  setKioskMode: (on) => ipcRenderer.invoke('set-kiosk-mode', on),
 }); 

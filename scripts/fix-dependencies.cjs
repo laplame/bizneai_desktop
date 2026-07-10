@@ -21,7 +21,6 @@ const problematicDeps = [
   'dunder-proto',
   'get-proto',
   'better-sqlite3',
-  'sqlite3',
   'express',
   'qs',
   'cloudinary',

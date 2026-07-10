@@ -184,17 +184,19 @@ const SalesReports = ({ isOpen, onClose, onRecoverSaleToCart }: SalesReportsProp
         setFilteredSales(merged);
         toast.success(`${merged.length} ventas cargadas (servidor + locales)`, { id: 'loading-sales' });
       } else {
-        const sampleSales = mergeWithLocalMerkle(generateSampleSales());
-        setSales(sampleSales);
-        setFilteredSales(sampleSales);
-        toast.success('No hay ventas en el servidor. Mostrando muestra y ventas locales', { id: 'loading-sales' });
+        // Solo ventas reales (Merkle local); nada de datos de muestra en producción.
+        const localSales = mergeWithLocalMerkle([]);
+        setSales(localSales);
+        setFilteredSales(localSales);
+        toast.success('No hay ventas en el servidor. Mostrando ventas locales', { id: 'loading-sales' });
       }
     } catch (error) {
       console.error('Error loading sales from server:', error);
       toast.error('Error al cargar ventas desde el servidor', { id: 'loading-sales' });
-      const sampleSales = mergeWithLocalMerkle(generateSampleSales());
-      setSales(sampleSales);
-      setFilteredSales(sampleSales);
+      // Ante error, mostrar solo ventas reales locales (sin datos de muestra).
+      const localSales = mergeWithLocalMerkle([]);
+      setSales(localSales);
+      setFilteredSales(localSales);
     } finally {
       setIsLoading(false);
     }
@@ -206,9 +208,10 @@ const SalesReports = ({ isOpen, onClose, onRecoverSaleToCart }: SalesReportsProp
 
     const run = async () => {
       if (!isShopIdConfigured()) {
-        const sampleSales = mergeWithLocalMerkle(generateSampleSales());
-        setSales(sampleSales);
-        setFilteredSales(sampleSales);
+        // Sin tienda configurada: datos de muestra SOLO en desarrollo; en producción, reales.
+        const initial = mergeWithLocalMerkle(import.meta.env.DEV ? generateSampleSales() : []);
+        setSales(initial);
+        setFilteredSales(initial);
         loadTransactionsAndBlocks();
         return;
       }
@@ -1401,9 +1404,14 @@ const SalesReports = ({ isOpen, onClose, onRecoverSaleToCart }: SalesReportsProp
               </button>
             )}
             <button className="action-btn" title="Actualizar" onClick={() => {
-              const sampleSales = generateSampleSales();
-              setSales(sampleSales);
-              setFilteredSales(sampleSales);
+              // Recargar ventas REALES (no datos de muestra).
+              if (isShopIdConfigured()) {
+                loadSalesFromServer();
+              } else {
+                const localSales = mergeWithLocalMerkle([]);
+                setSales(localSales);
+                setFilteredSales(localSales);
+              }
             }}>
               <RefreshCw size={20} />
             </button>

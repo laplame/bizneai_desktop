@@ -22,6 +22,8 @@ interface ElectronAPI {
   pickTicketLogo?: () => Promise<{ path: string | null; error?: string }>;
   removeTicketLogo?: () => Promise<{ ok?: boolean }>;
   ticketLogoDataUrl?: (absPath: string) => Promise<string>;
+  /** Activa/desactiva la ventana en modo kiosko a pantalla completa (solo Electron). */
+  setKioskMode?: (on: boolean) => Promise<{ ok?: boolean; error?: string }>;
   /** Respaldo en `userData/.Backup/AAAA-MM-DD/` (solo Electron). */
   writeInventoryBackupCsv?: (payload: {
     csvText: string;

@@ -110,356 +110,39 @@ import {
   scheduleMirrorKeyToSqlite,
 } from './services/posPersistService';
 import { syncProductImagesToLocalDisk } from './services/productImageLocalCache';
+import { fillMissingImagesWithStock } from './utils/stockImage';
 import { getKitchenModuleVisibility } from './utils/kitchenModule';
 
-// Tipos de datos
-interface Product {
-  id: number;
-  name: string;
-  price: number;
-  category: string;
-  stock: number;
-  image?: string;
-  barcode?: string; // Agregando código de barras
-  isWeightBased?: boolean;
-  hasVariants?: boolean;
-  variantGroups?: VariantGroup[];
-  primaryVariantGroup?: string;
-  /** JSON/API: precio con IVA incluido para este artículo (sobrescribe la tienda). */
-  priceIncludesTax?: boolean;
-  /** JSON/API: artículo exento de impuesto. */
-  taxExempt?: boolean;
-}
+// Tipos de datos — canonical domain types now live in src/types/domain.ts
+import type { PosProduct as Product, CartItem, CustomerInfo } from './types/domain';
 
-interface CartItem {
-  id: string;
-  product: Product;
-  quantity: number;
-  weight?: number;
-  selectedVariants?: SelectedVariants;
-  variantDisplayName?: string;
-  unitPrice: number;
-  itemTotal: number;
-  notes?: string;
-}
-
-interface CustomerInfo {
-  name?: string;
-  phone?: string;
-  email?: string;
-  tableNumber?: string;
-  waiterName?: string;
-  /** Si se elige del registro de clientes (Clientes). */
-  customerId?: number;
-}
-
-// Datos de ejemplo con códigos de barras (Café Latte tiene variantes tipo cafetería)
-const sampleProducts: Product[] = [
-  { id: 1, name: 'Café Americano', price: 2.50, category: 'Bebidas', stock: 50, barcode: '1234567890123' },
-  {
-    id: 2,
-    name: 'Café Latte',
-    price: 4.00,
-    category: 'Bebidas',
-    stock: 45,
-    barcode: '1234567890124',
-    hasVariants: true,
-    variantGroups: [
-      {
-        name: 'Size',
-        label: 'Tamaño',
-        type: 'size',
-        isPrimary: true,
-        order: 0,
-        variants: [
-          { name: 'Chico', value: 'S', priceModifier: 0, isDefault: true, order: 0 },
-          { name: 'Mediano', value: 'M', priceModifier: 0.5, order: 1 },
-          { name: 'Grande', value: 'L', priceModifier: 1.0, order: 2 }
-        ]
-      },
-      {
-        name: 'Milk',
-        label: 'Tipo de leche',
-        type: 'custom',
-        order: 1,
-        variants: [
-          { name: 'Normal', value: 'normal', priceModifier: 0, isDefault: true, order: 0 },
-          { name: 'Leche almendras', value: 'almond', priceModifier: 0.5, order: 1 },
-          { name: 'Leche avena', value: 'oat', priceModifier: 0.5, order: 2 }
-        ]
-      },
-      {
-        name: 'Extras',
-        label: 'Extras',
-        type: 'custom',
-        allowMultiple: true,
-        order: 2,
-        variants: [
-          { name: 'Shot extra', value: 'extra_shot', priceModifier: 1.0, order: 0 },
-          { name: 'Crema batida', value: 'whipped', priceModifier: 0.5, order: 1 }
-        ]
-      }
-    ],
-    primaryVariantGroup: 'Size'
-  },
-  { id: 3, name: 'Cappuccino', price: 3.00, category: 'Bebidas', stock: 40, barcode: '1234567890125' },
-  { id: 4, name: 'Croissant', price: 2.00, category: 'Panadería', stock: 30, barcode: '1234567890126' },
-  { id: 5, name: 'Muffin de Chocolate', price: 2.50, category: 'Panadería', stock: 25, barcode: '1234567890127' },
-  { id: 6, name: 'Sándwich de Pollo', price: 5.50, category: 'Comida', stock: 20, barcode: '1234567890128' },
-  { id: 7, name: 'Ensalada César', price: 6.00, category: 'Comida', stock: 15, barcode: '1234567890129' },
-  { id: 8, name: 'Pizza Margherita', price: 8.50, category: 'Comida', stock: 10, barcode: '1234567890130' },
-  { id: 9, name: 'Agua Mineral', price: 1.50, category: 'Bebidas', stock: 100, barcode: '1234567890131' },
-  { id: 10, name: 'Jugo de Naranja', price: 2.00, category: 'Bebidas', stock: 35, barcode: '1234567890132' },
-  { id: 11, name: 'Tarta de Manzana', price: 3.50, category: 'Postres', stock: 20, barcode: '1234567890133' },
-  { id: 12, name: 'Helado de Vainilla', price: 2.50, category: 'Postres', stock: 30, barcode: '1234567890134' },
-];
-
-const CLOUDINARY_PRODUCTS_BASE_URL = 'https://res.cloudinary.com/pin-pos/image/upload';
-const IMAGE_FILENAME_REGEX = /^(images-\d{13}-[A-Za-z0-9_-]+\.(?:jpg|jpeg|png|webp|gif))$/i;
-
-const getApiOriginFromConfig = (): string => {
-  try {
-    const serverConfigRaw = localStorage.getItem('bizneai-server-config');
-    if (!serverConfigRaw) return 'https://www.bizneai.com';
-
-    const serverConfig = JSON.parse(serverConfigRaw);
-    if (serverConfig?.mcpUrl) return new URL(serverConfig.mcpUrl).origin;
-    if (serverConfig?.serverUrl) return new URL(serverConfig.serverUrl).origin;
-  } catch {
-    // Use default origin
-  }
-
-  return 'https://www.bizneai.com';
-};
-
-const normalizeProductImageUrl = (value?: string): string => {
-  if (!value || typeof value !== 'string') return '';
-  const trimmed = value.trim();
-  if (!trimmed) return '';
-  if (/^https?:\/\//i.test(trimmed)) return trimmed;
-
-  const filename = trimmed.split('?')[0].split('#')[0].split('/').pop() || trimmed;
-  if (IMAGE_FILENAME_REGEX.test(filename)) {
-    const millisMatch = filename.match(/^images-(\d{13})-/i);
-    if (millisMatch) {
-      const version = millisMatch[1].slice(0, 10);
-      return `${CLOUDINARY_PRODUCTS_BASE_URL}/v${version}/products/${filename}`;
-    }
-  }
-
-  if (trimmed.startsWith('/')) {
-    return `${getApiOriginFromConfig()}${trimmed}`;
-  }
-
-  return trimmed;
-};
-
-// Plantillas de variantes para productos conocidos (cafetería). Se aplican al cargar si el producto no tiene variantGroups.
-const VARIANT_TEMPLATES: Record<string, Partial<Product>> = {
-  'café latte': {
-    hasVariants: true,
-    variantGroups: [
-      {
-        name: 'Size',
-        label: 'Tamaño',
-        type: 'size',
-        isPrimary: true,
-        order: 0,
-        variants: [
-          { name: 'Chico', value: 'S', priceModifier: 0, isDefault: true, order: 0 },
-          { name: 'Mediano', value: 'M', priceModifier: 0.5, order: 1 },
-          { name: 'Grande', value: 'L', priceModifier: 1.0, order: 2 }
-        ]
-      },
-      {
-        name: 'Milk',
-        label: 'Tipo de leche',
-        type: 'custom',
-        order: 1,
-        variants: [
-          { name: 'Normal', value: 'normal', priceModifier: 0, isDefault: true, order: 0 },
-          { name: 'Leche almendras', value: 'almond', priceModifier: 0.5, order: 1 },
-          { name: 'Leche avena', value: 'oat', priceModifier: 0.5, order: 2 }
-        ]
-      },
-      {
-        name: 'Extras',
-        label: 'Extras',
-        type: 'custom',
-        allowMultiple: true,
-        order: 2,
-        variants: [
-          { name: 'Shot extra', value: 'extra_shot', priceModifier: 1.0, order: 0 },
-          { name: 'Crema batida', value: 'whipped', priceModifier: 0.5, order: 1 }
-        ]
-      }
-    ],
-    primaryVariantGroup: 'Size'
-  },
-  'cappuccino': {
-    hasVariants: true,
-    variantGroups: [
-      {
-        name: 'Size',
-        label: 'Tamaño',
-        type: 'size',
-        isPrimary: true,
-        order: 0,
-        variants: [
-          { name: 'Chico', value: 'S', priceModifier: 0, isDefault: true, order: 0 },
-          { name: 'Mediano', value: 'M', priceModifier: 0.5, order: 1 },
-          { name: 'Grande', value: 'L', priceModifier: 1.0, order: 2 }
-        ]
-      }
-    ],
-    primaryVariantGroup: 'Size'
-  },
-  'café americano': {
-    hasVariants: true,
-    variantGroups: [
-      {
-        name: 'Size',
-        label: 'Tamaño',
-        type: 'size',
-        isPrimary: true,
-        order: 0,
-        variants: [
-          { name: 'Chico', value: 'S', priceModifier: 0, isDefault: true, order: 0 },
-          { name: 'Mediano', value: 'M', priceModifier: 0.5, order: 1 },
-          { name: 'Grande', value: 'L', priceModifier: 1.0, order: 2 }
-        ]
-      }
-    ],
-    primaryVariantGroup: 'Size'
-  },
-  'smoothie': {
-    hasVariants: true,
-    variantGroups: [
-      {
-        name: 'Size',
-        label: 'Tamaño',
-        type: 'size',
-        isPrimary: true,
-        order: 0,
-        variants: [
-          { name: 'Chico', value: 'S', priceModifier: -5, isDefault: true, order: 0 },
-          { name: 'Mediano', value: 'M', priceModifier: 0, order: 1 },
-          { name: 'Grande', value: 'L', priceModifier: 5, order: 2 }
-        ]
-      }
-    ],
-    primaryVariantGroup: 'Size'
-  }
-};
-
-/** Fila API MCP para variantes (shape flexible) */
-type ApiVariantRow = Record<string, unknown>;
-type ApiProductRow = Record<string, unknown>;
-
-/** Normaliza variantGroups de API (p. ej. "options" -> "variants", nombres de variante) */
-const normalizeVariantGroups = (groups: unknown): ApiVariantRow[] => {
-  if (!Array.isArray(groups)) return [];
-  return groups.map((g) => {
-    const row = (g && typeof g === 'object' ? g : {}) as ApiVariantRow;
-    const rawV = row.variants ?? row.options;
-    const variants = Array.isArray(rawV) ? rawV : [];
-    return {
-      ...row,
-      name: row.name ?? row.id ?? '',
-      label: row.label ?? row.name ?? '',
-      variants: variants.map((v) => {
-        const vr = (v && typeof v === 'object' ? v : {}) as ApiVariantRow;
-        return {
-          name: vr.name ?? vr.label ?? vr.optionName ?? vr.value ?? '',
-          value: String(vr.value ?? vr.name ?? vr.id ?? ''),
-          price: vr.price,
-          priceModifier: vr.priceModifier,
-          stock: vr.stock,
-          isDefault: vr.isDefault ?? vr.default ?? false,
-          order: vr.order ?? 0,
-        };
-      }),
-    };
-  });
-};
-
-const applyVariantTemplates = (product: ApiProductRow): ApiProductRow => {
-  const vg = product.variantGroups;
-  if (Array.isArray(vg) && vg.length > 0) {
-    return {
-      ...product,
-      variantGroups: normalizeVariantGroups(vg),
-      hasVariants: true,
-      primaryVariantGroup:
-        (product.primaryVariantGroup as string | undefined) ??
-        (typeof (vg[0] as ApiVariantRow)?.name === 'string' ? (vg[0] as ApiVariantRow).name : undefined),
-    };
-  }
-  const name = String(product.name || '')
-    .toLowerCase()
-    .trim();
-  const template = VARIANT_TEMPLATES[name];
-  if (!template) return product;
-  return { ...product, ...template };
-};
-
-const hydrateProductsForPos = (productsList: unknown[]): Product[] => {
-  const list = Array.isArray(productsList) ? productsList : [];
-  return list.map((product: unknown, index: number) => {
-    const withVariants = applyVariantTemplates(
-      (product && typeof product === 'object' ? product : {}) as ApiProductRow
-    );
-    const meta =
-      withVariants.imageMetadata && typeof withVariants.imageMetadata === 'object'
-        ? (withVariants.imageMetadata as Record<string, unknown>)
-        : {};
-    const cy = meta.cloudinaryUrls;
-    const lu = meta.localUrls;
-    const imgs = withVariants.images;
-    const imageCandidate =
-      withVariants.image ||
-      (Array.isArray(imgs) ? imgs[0] : undefined) ||
-      (Array.isArray(cy) ? cy[0] : undefined) ||
-      (Array.isArray(lu) ? lu[0] : undefined) ||
-      '';
-
-    return {
-      ...withVariants,
-      id: normalizeProductId(withVariants?.id, index),
-      image: normalizeProductImageUrl(
-        typeof imageCandidate === 'string' ? imageCandidate : String(imageCandidate ?? '')
-      ),
-      hasVariants: Boolean(withVariants?.hasVariants),
-      variantGroups: withVariants?.variantGroups,
-      primaryVariantGroup: withVariants?.primaryVariantGroup,
-    } as Product;
-  });
-};
-
-const looksLikeSampleCatalog = (productsList: Product[]): boolean => {
-  if (!productsList || productsList.length === 0) return false;
-  const sampleNames = new Set(sampleProducts.map((p) => p.name));
-  const matches = productsList.filter((p) => sampleNames.has(p.name)).length;
-  const threshold = Math.min(3, sampleProducts.length);
-  return matches >= threshold;
-};
-
-const getConfiguredMcpUrl = (): string => {
-  try {
-    const serverConfigRaw = localStorage.getItem('bizneai-server-config');
-    if (!serverConfigRaw) return '';
-    const serverConfig = JSON.parse(serverConfigRaw);
-    return serverConfig?.mcpUrl || '';
-  } catch {
-    return '';
-  }
-};
+// POS catalog hydration & sample data extracted to utils/posCatalog.ts
+import {
+  sampleProducts,
+  hydrateProductsForPos,
+  looksLikeSampleCatalog,
+  getConfiguredMcpUrl,
+} from './utils/posCatalog';
+import { useCart } from './hooks/useCart';
+import { useKioskMode } from './hooks/useKioskMode';
+import KioskExitButton from './components/KioskExitButton';
+import KioskView from './components/KioskView';
+import { createCartLine } from './utils/cartOperations';
+import { nextSaleTicketId } from './utils/saleId';
 
 function App() {
   const { t } = useTranslation();
   /** Con tienda MCP configurada no mostrar muestra de cafetería (evita flash de productos ajenos al shop). */
   const [products, setProducts] = useState<Product[]>(() => (isShopIdConfigured() ? [] : sampleProducts));
-  const [cart, setCart] = useState<CartItem[]>([]);
+  // Cart state + operations live in useCart (backed by pure utils/cartOperations).
+  // setCart is still used directly by sale-recovery / waitlist / hydration flows.
+  const { cart, setCart, addProduct, changeQuantity, removeLine, setLineNotes } = useCart();
+  // Modo kiosko autoservicio: se activa desde Configuración; salir requiere passcode.
+  const { kiosk } = useKioskMode();
+  // Al entrar en kiosko, forzar la vista POS (pantalla de autoservicio).
+  useEffect(() => {
+    if (kiosk) setActiveSection('pos');
+  }, [kiosk]);
   const [productOrderCounts, setProductOrderCounts] = useState<{ [productId: number]: number }>({});
   
   // Categorías dinámicas extraídas de los productos
@@ -605,7 +288,10 @@ function App() {
           const mappedProducts = mcpProducts.map((p: unknown, index: number) => mapMcpProductToLocal(p, index));
           const merged = mergeProductsFromServerPreserveImages(savedParsed, mappedProducts);
           const mergedWithInv = await applyMcpInventoryStatusToMergedCatalog(merged);
-          const mergedCached = await syncProductImagesToLocalDisk(mergedWithInv);
+          // Rellena con foto de stock los productos sin imagen (utils/stockImage);
+          // luego el pipeline las descarga y guarda en disco local.
+          const withStock = fillMissingImagesWithStock(mergedWithInv);
+          const mergedCached = await syncProductImagesToLocalDisk(withStock);
           const hydrated = hydrateProductsForPos(mergedCached);
           setProducts(hydrated);
           setCategories(extractCategories(hydrated));
@@ -639,10 +325,15 @@ function App() {
             const isSampleCatalog = looksLikeSampleCatalog(hydratedLocalProducts);
             if (hasAnyImage && !isSampleCatalog) {
               if (isShopIdConfigured() && hydratedLocalProducts.some((p) => !p?.image || String(p.image).trim() === '')) {
-                enrichProductsWithImages(hydratedLocalProducts).then((enriched) => {
-                  setProducts(enriched);
-                  setCategories(extractCategories(enriched));
-                  localStorage.setItem('bizneai-products', JSON.stringify(enriched));
+                enrichProductsWithImages(hydratedLocalProducts).then(async (enriched) => {
+                  // Los que sigan sin foto (MCP tampoco tiene) reciben imagen de stock,
+                  // que luego se descarga y guarda en disco local.
+                  const withStock = fillMissingImagesWithStock(enriched);
+                  const cached = await syncProductImagesToLocalDisk(withStock);
+                  const finalProducts = hydrateProductsForPos(cached);
+                  setProducts(finalProducts);
+                  setCategories(extractCategories(finalProducts));
+                  localStorage.setItem('bizneai-products', JSON.stringify(finalProducts));
                   window.dispatchEvent(new Event('products-updated'));
                 });
               }
@@ -682,7 +373,10 @@ function App() {
           const mappedProducts = mcpProducts.map((p: unknown, index: number) => mapMcpProductToLocal(p, index));
           const merged = mergeProductsFromServerPreserveImages(savedParsed, mappedProducts);
           const mergedWithInv = await applyMcpInventoryStatusToMergedCatalog(merged);
-          const mergedCached = await syncProductImagesToLocalDisk(mergedWithInv);
+          // Rellena con foto de stock los productos sin imagen (utils/stockImage);
+          // luego el pipeline las descarga y guarda en disco local.
+          const withStock = fillMissingImagesWithStock(mergedWithInv);
+          const mergedCached = await syncProductImagesToLocalDisk(withStock);
           const hydrated = hydrateProductsForPos(mergedCached);
           setProducts(hydrated);
           setCategories(extractCategories(hydrated));
@@ -961,53 +655,32 @@ function App() {
     );
   }
 
-  // Filtrar productos por categoría y búsqueda
-  const filteredProducts = products
-    .filter(product => {
-      const matchesCategory = selectedCategory === 'Todos' || 
-                            product.category === selectedCategory ||
-                            (product.category && product.category.toLowerCase() === selectedCategory.toLowerCase());
-      const matchesSearch = product.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                           (product.barcode && product.barcode.includes(searchTerm));
-      return matchesCategory && matchesSearch;
-    })
-    // Ordenar por cantidad de pedidos (más pedidos primero)
-    .sort((a, b) => {
-      const countA = productOrderCounts[a.id] || 0;
-      const countB = productOrderCounts[b.id] || 0;
-      // Orden descendente: más pedidos primero
-      return countB - countA;
-    });
+  // Filtrar y ordenar productos por categoría/búsqueda/popularidad.
+  // Memoizado: antes se recalculaba en cada render (p. ej. al tocar el carrito).
+  const filteredProducts = useMemo(() => {
+    const search = searchTerm.toLowerCase();
+    const category = selectedCategory.toLowerCase();
+    return products
+      .filter(product => {
+        const matchesCategory = selectedCategory === 'Todos' ||
+                              product.category === selectedCategory ||
+                              (product.category && product.category.toLowerCase() === category);
+        const matchesSearch = product.name.toLowerCase().includes(search) ||
+                             (product.barcode && product.barcode.includes(searchTerm));
+        return matchesCategory && matchesSearch;
+      })
+      // Ordenar por cantidad de pedidos (más pedidos primero)
+      .sort((a, b) => (productOrderCounts[b.id] || 0) - (productOrderCounts[a.id] || 0));
+  }, [products, selectedCategory, searchTerm, productOrderCounts]);
 
-  // Crear item del carrito con estructura completa (variantes, modificadores, notas)
+  // Crear item del carrito — delega en la función pura createCartLine (utils/cartOperations).
   const createCartItem = (
     product: Product,
     quantity: number = 1,
     weight?: number,
     variants?: SelectedVariants,
     notes?: string
-  ): CartItem => {
-    const unitPrice = variants && product.hasVariants
-      ? calculateProductPrice(product, variants)
-      : product.price;
-    const finalQuantity = product.isWeightBased && weight ? weight : quantity;
-    const itemTotal = unitPrice * finalQuantity;
-    const variantDisplayName = variants && product.variantGroups?.length
-      ? buildVariantDisplayName(product.name, product.variantGroups, variants)
-      : undefined;
-
-    return {
-      id: `${product.id}-${Date.now()}-${Math.random()}`,
-      product,
-      quantity: product.isWeightBased ? 1 : quantity,
-      weight: product.isWeightBased ? weight || 1 : undefined,
-      selectedVariants: variants,
-      variantDisplayName,
-      unitPrice,
-      itemTotal,
-      notes
-    };
-  };
+  ): CartItem => createCartLine(product, { quantity, weight, variants, notes });
 
   // Incrementar contador de pedidos para un producto
   const incrementProductOrderCount = (productId: number) => {
@@ -1047,7 +720,9 @@ function App() {
     );
   };
 
-  // Agregar producto al carrito (con variantes y notas por línea)
+  // Agregar producto al carrito (con variantes y notas por línea).
+  // La lógica de merge/stock vive en useCart→cartOperations; aquí quedan los
+  // efectos: validación previa, contador de pedidos y el toast de stock.
   const addToCart = (
     product: Product,
     quantity: number = 1,
@@ -1055,60 +730,28 @@ function App() {
     variants?: SelectedVariants,
     notes?: string
   ) => {
-    // Validar inventario
     if (!product.isWeightBased && quantity > product.stock) {
       showStockInsufficientToast(product.stock, '', product);
       return;
     }
-    
+
     // Incrementar contador de pedidos cada vez que se agrega al carrito
     incrementProductOrderCount(product.id);
-    
-    setCart(prevCart => {
-      // Buscar si ya existe un item con el mismo producto y variantes (normalizar id para string/number)
-      const productIdStr = String(product.id);
-      const existingItem = prevCart.find(item => {
-        if (String(item.product.id) !== productIdStr) return false;
-        if (product.hasVariants && variants) {
-          // Comparar variantes
-          const itemVariants = JSON.stringify(item.selectedVariants || {});
-          const newVariants = JSON.stringify(variants);
-          return itemVariants === newVariants;
-        }
-        return !product.hasVariants;
-      });
-      
-      if (existingItem) {
-        // Actualizar cantidad existente
-        return prevCart.map(item => {
-          if (item.id === existingItem.id) {
-            const newQuantity = product.isWeightBased 
-              ? (item.weight || 0) + (weight || 0)
-              : item.quantity + quantity;
-            
-            if (!product.isWeightBased && newQuantity > product.stock) {
-              showStockInsufficientToast(product.stock, '', product);
-              return item;
-            }
-            
-            const finalQuantity = product.isWeightBased ? newQuantity : newQuantity;
-            const itemTotal = item.unitPrice * finalQuantity;
-            
-            return {
-              ...item,
-              quantity: product.isWeightBased ? 1 : newQuantity,
-              weight: product.isWeightBased ? newQuantity : item.weight,
-              itemTotal
-            };
-          }
-          return item;
-        });
-      } else {
-        // Agregar nuevo item
-        const newItem = createCartItem(product, quantity, weight, variants, notes);
-        return [...prevCart, newItem];
-      }
-    });
+
+    const result = addProduct(product, { quantity, weight, variants, notes });
+    if (result.error === 'insufficient-stock') {
+      showStockInsufficientToast(result.available ?? product.stock, result.unit ?? '', result.product ?? product);
+    }
+  };
+
+  // Selección de producto en modo kiosko (cliente): sin abrir inventario (admin).
+  const handleKioskProductSelect = (product: Product) => {
+    if (product.stock === 0) return;
+    if (product.hasVariants && product.variantGroups?.length) {
+      setProductForVariantModal(product);
+    } else {
+      addToCart(product);
+    }
   };
 
   const handleRecoverSaleFromReports = (payload: RecoveredSalePayload) => {
@@ -1166,48 +809,20 @@ function App() {
 
   // Actualizar notas de un ítem del carrito
   const updateCartItemNotes = (itemId: string, notes: string) => {
-    setCart(prev => prev.map(item =>
-      item.id === itemId ? { ...item, notes: notes.trim() || undefined } : item
-    ));
+    setLineNotes(itemId, notes);
   };
 
-  // Actualizar cantidad en el carrito (nuevo formato)
+  // Actualizar cantidad en el carrito (merge/stock en useCart→cartOperations)
   const updateCartQuantity = (itemId: string, newQuantity: number, weight?: number) => {
-    setCart(prevCart =>
-      prevCart.map(item => {
-        if (item.id === itemId) {
-          const product = item.product;
-          const quantity = product.isWeightBased ? 1 : newQuantity;
-          const finalWeight = product.isWeightBased ? (weight || newQuantity) : item.weight;
-          
-          if (!product.isWeightBased && newQuantity > product.stock) {
-            showStockInsufficientToast(product.stock, '', product);
-            return item;
-          }
-          
-          if (product.isWeightBased && finalWeight && finalWeight > product.stock) {
-            showStockInsufficientToast(product.stock, 'kg', product);
-            return item;
-          }
-          
-          const finalQuantity = product.isWeightBased ? finalWeight || 0 : quantity;
-          const itemTotal = item.unitPrice * finalQuantity;
-          
-          return {
-            ...item,
-            quantity,
-            weight: finalWeight,
-            itemTotal
-          };
-        }
-        return item;
-      })
-    );
+    const result = changeQuantity(itemId, newQuantity, weight);
+    if (result.error === 'insufficient-stock' && result.product) {
+      showStockInsufficientToast(result.available ?? result.product.stock, result.unit ?? '', result.product);
+    }
   };
 
   // Remover producto del carrito (nuevo formato)
   const removeCartItem = (itemId: string) => {
-    setCart(prevCart => prevCart.filter(item => item.id !== itemId));
+    removeLine(itemId);
     toast.success('Producto removido del carrito');
   };
 
@@ -1422,7 +1037,7 @@ function App() {
 
   // Manejar completar checkout (crea venta en API según Sales Sync Model)
   const handleCheckoutComplete = async (paymentMethod: string, amount: number, change?: number) => {
-    const saleId = `TKT-${Math.floor(Math.random() * 100000) + 10000}`;
+    const saleId = nextSaleTicketId();
     const wlEntryId = pendingWaitlistEntryIdRef.current;
     const isCredit = String(paymentMethod).toLowerCase() === 'credit';
     const notesMerged =
@@ -2422,18 +2037,24 @@ function App() {
                                   loading="lazy"
                                 />
                                 <span className="product-add-overlay" aria-hidden="true">+</span>
-                                <div className="product-price-overlay">
-                                  ${product.price.toFixed(2)}
-                                  {product.hasVariants && product.variantGroups?.length && (
-                                    <span className="product-variants-badge" title={t('products.hasVariants')}>+</span>
-                                  )}
+                                <div className="product-info-overlay">
+                                  <span className="product-overlay-name">{product.name}</span>
+                                  <span className="product-overlay-price">
+                                    ${product.price.toFixed(2)}
+                                    {product.hasVariants && product.variantGroups?.length && (
+                                      <span className="product-variants-badge" title={t('products.hasVariants')}>+</span>
+                                    )}
+                                  </span>
                                 </div>
                               </>
                             ) : (
                               <Package size={32} />
                             )}
                           </div>
-                          <div className="product-name">{product.name}</div>
+                          {/* Sin imagen: nombre y precio debajo. Con imagen: van dentro del overlay. */}
+                          {!shouldShowImage(product.image) && (
+                            <div className="product-name">{product.name}</div>
+                          )}
                           {!shouldShowImage(product.image) && (
                             <div className="product-price">
                               ${product.price.toFixed(2)}
@@ -2908,7 +2529,7 @@ function App() {
           onClose={() => setIsVirtualTicketOpen(false)}
           cart={cart.length > 0 ? cart : (lastSaleData ? [] : [])}
           total={cart.length > 0 ? cart.reduce((sum, item) => sum + item.itemTotal, 0) * 1.16 : (lastSaleData ? (lastSaleData.change || 0) : 0)}
-          saleId={lastSaleData?.saleId || `TKT-${Math.floor(Math.random() * 100000) + 10000}`}
+          saleId={lastSaleData?.saleId || 'TKT-PREVIEW'}
           paymentMethod={lastSaleData?.paymentMethod || 'cash'}
           change={lastSaleData?.change}
           customerInfo={lastSaleData?.customerInfo}
@@ -2939,6 +2560,28 @@ function App() {
             },
           }}
         />
+
+        {/* Vista de autoservicio (kiosko): reemplaza el POS con la pantalla del cliente */}
+        {kiosk && (
+          <KioskView
+            products={filteredProducts}
+            categories={categories}
+            selectedCategory={selectedCategory}
+            onSelectCategory={setSelectedCategory}
+            searchTerm={searchTerm}
+            onSearch={setSearchTerm}
+            cart={cart}
+            totals={{ subtotal: cartTax.subtotalExclTax, tax: cartTax.taxAmount, total: cartTax.total }}
+            itemCount={cart.reduce((n, i) => n + (i.quantity || 1), 0)}
+            onProductClick={handleKioskProductSelect}
+            onChangeQty={updateCartQuantity}
+            onRemove={removeCartItem}
+            onCheckout={() => setIsCheckoutOpen(true)}
+          />
+        )}
+
+        {/* Salida del kiosko autoservicio (solo visible en kiosko; requiere passcode) */}
+        {kiosk && <KioskExitButton />}
 
         <StockSyncPulse />
 

@@ -39,7 +39,6 @@ module.exports = {
     "node_modules/dunder-proto/**/*",
     "node_modules/get-proto/**/*",
     "node_modules/better-sqlite3/**/*",
-    "node_modules/sqlite3/**/*",
     "node_modules/express/**/*",
     "node_modules/qs/**/*",
     "node_modules/cloudinary/**/*",

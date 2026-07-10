@@ -142,14 +142,14 @@ export function registerPosStorageMirror(): void {
   });
 }
 
-/** Sube al servidor las claves definidas si existen en localStorage. */
+/** Sube al servidor las claves definidas si existen en localStorage (en paralelo). */
 export async function flushMirroredKeysToServer(): Promise<void> {
-  for (const key of KEYS_TO_MIRROR) {
-    const v = localStorage.getItem(key);
-    if (v != null && v !== '') {
-      await pushKvToServer(key, v);
-    }
-  }
+  await Promise.all(
+    KEYS_TO_MIRROR.map((key) => {
+      const v = localStorage.getItem(key);
+      return v != null && v !== '' ? pushKvToServer(key, v) : Promise.resolve(false);
+    })
+  );
 }
 
 /** Si el servidor tiene datos y local no, hidrata localStorage. */

@@ -47,6 +47,13 @@ installer/
 *.db
 *.sqlite
 *.sqlite3
+# SQLite WAL/SHM sidecars (not matched by *.db / *.sqlite)
+*.db-wal
+*.db-shm
+*.sqlite-wal
+*.sqlite-shm
+# Datos de runtime del API local en desarrollo (SQLite + caché de imágenes)
+server/data/
 
 # Large media files
 *.mp4

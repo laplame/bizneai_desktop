@@ -594,6 +594,19 @@ app.whenReady().then(async () => {
     return { ok: true };
   });
 
+  // Modo kiosko: ventana a pantalla completa bloqueada para terminal táctil dedicada.
+  ipcMain.handle('set-kiosk-mode', (_e, on) => {
+    const win = posMainWindow;
+    if (!win || win.isDestroyed()) return { ok: false, error: 'no-window' };
+    try {
+      win.setKiosk(!!on);
+      if (!on) win.setFullScreen(false);
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: e?.message || String(e) };
+    }
+  });
+
   ipcMain.handle('db-console-minimize', () => {
     if (dbConsoleWindow && !dbConsoleWindow.isDestroyed()) {
       dbConsoleWindow.minimize();

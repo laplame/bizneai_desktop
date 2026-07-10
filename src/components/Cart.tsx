@@ -19,38 +19,8 @@ import {
   Loader
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
-
-interface Product {
-  id: number;
-  name: string;
-  price: number;
-  category: string;
-  stock: number;
-  image?: string;
-  barcode?: string;
-  isWeightBased?: boolean;
-  hasVariants?: boolean;
-  variants?: { [key: string]: string[] };
-  variantModifiers?: { [key: string]: number };
-}
-
-interface CartItem {
-  id: string;
-  product: Product;
-  quantity: number;
-  weight?: number;
-  selectedVariants?: { [key: string]: string };
-  unitPrice: number;
-  itemTotal: number;
-  notes?: string;
-}
-
-interface CustomerInfo {
-  name?: string;
-  phone?: string;
-  email?: string;
-  tableNumber?: string;
-}
+// Canonical POS domain types (were declared inline here). See src/types/domain.ts.
+import type { PosProduct as Product, CartItem, CustomerInfo } from '../types/domain';
 
 interface CartProps {
   items: CartItem[];

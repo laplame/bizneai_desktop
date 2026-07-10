@@ -102,12 +102,18 @@ function buildBizneaiApp(): { app: express.Express; server: HttpServer; io: Serv
     });
   });
 
-  app.use('/api/proxy', mcpProxyRoutes);
-  app.use('/api/merkle-ledger', merkleLedgerRoutes);
-  app.use('/api/local-activity', localActivityRoutes);
-  app.use('/api/pos', posKvRoutes);
-  app.use('/api/pos', posProductImageRoutes);
-  app.use('/api/local-db/console', localDbConsoleRoutes);
+  // --- REAL routes: SQLite-backed persistence, the desktop POS source of truth ---
+  app.use('/api/proxy', mcpProxyRoutes);              // proxy to remote MCP (catalog/stock)
+  app.use('/api/merkle-ledger', merkleLedgerRoutes);  // sales ledger integrity
+  app.use('/api/local-activity', localActivityRoutes);// local activity DB
+  app.use('/api/pos', posKvRoutes);                   // localStorage → SQLite KV mirror
+  app.use('/api/pos', posProductImageRoutes);         // product images on disk
+  app.use('/api/local-db/console', localDbConsoleRoutes); // read-only SQL console
+  app.use('/api', imageRoutes);                       // image serving
+
+  // --- MOCK / LEGACY routes: in-memory arrays that RESET on restart. ---
+  // Vestiges of the forked cloud API; NOT the desktop source of truth.
+  // Each file carries a "MOCK / LEGACY ROUTE" banner. See docs/ARCHITECTURE.md.
   app.use('/api/shop', shopRoutes);
   app.use('/api/products', productRoutes);
   app.use('/api/kitchen', kitchenRoutes);
@@ -117,7 +123,6 @@ function buildBizneaiApp(): { app: express.Express; server: HttpServer; io: Serv
   app.use('/api/inventory', inventoryRoutes);
   app.use('/api/tickets', ticketRoutes);
   app.use('/api/orders', orderRoutes);
-  app.use('/api', imageRoutes);
 
   app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), (_req, res) => {
     res.json({ received: true });

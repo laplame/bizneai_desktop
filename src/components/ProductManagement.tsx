@@ -34,30 +34,8 @@ import {
   type ProductComponentRow,
   getComponentsFromProductRecord,
 } from '../utils/productComponents';
-
-interface Product {
-  id: number | string;
-  name: string;
-  description: string;
-  price: number;
-  cost: number;
-  category: string;
-  stock: number;
-  minStock: number;
-  maxStock: number;
-  barcode: string;
-  sku: string;
-  unit: string;
-  supplier: string;
-  location: string;
-  isActive: boolean;
-  image?: string;
-  tags: string[];
-  /** Insumos / BOM / receta (MCP o local). */
-  components?: ProductComponentRow[];
-  createdAt: string;
-  updatedAt: string;
-}
+// Canonical admin product shape (was declared inline here). See src/types/domain.ts.
+import type { ManagedProduct as Product } from '../types/domain';
 
 interface ProductManagementProps {
   isOpen: boolean;

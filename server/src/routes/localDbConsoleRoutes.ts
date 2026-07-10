@@ -7,7 +7,7 @@ import type Database from 'better-sqlite3';
 import path from 'path';
 import { getPosKvDb } from '../posKvDb.js';
 import { getLocalActivityDb } from '../localActivityDb.js';
-import { getDatabase, getLegacyBizneaiDbPath } from '../../../src/database/database.js';
+import { getDatabase, getLegacyBizneaiDbPath } from '../legacyDb.js';
 import { ensureBizneaiDataDir } from '../dataPaths.js';
 
 const router = express.Router();

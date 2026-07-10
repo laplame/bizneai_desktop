@@ -1351,11 +1351,15 @@ html, body {
 /* POS Product Grid - tarjetas más grandes para terminales táctiles */
 .product-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 1rem;
+  /* Responsive: tarjetas ~150px que se reflujan según el ancho disponible.
+     El 220px anterior dejaba pocas columnas anchas (aspecto de "banner").
+     min(150px, 100%) evita desbordes horizontales en ventanas muy angostas. */
+  grid-template-columns: repeat(auto-fill, minmax(min(170px, 100%), 1fr));
+  gap: 0.85rem;
   padding: 1rem;
   flex: 1;
   overflow-y: auto;
+  align-content: start;
 }
 
 /* POS Product Cards - Apply to all product cards in main content */
@@ -1426,20 +1430,42 @@ html, body {
   box-sizing: border-box;
 }
 
-/* Tarjetas con imagen: altura fija solo en la zona de imagen (sin estirar la tarjeta) */
+/* Tarjetas con imagen: la imagen ocupa toda la tarjeta (tile cuadrado) y los
+   datos (nombre + precio) van superpuestos dentro, abajo. */
 .product-grid .product-card--has-image {
   min-height: 0;
+  padding: 0 !important;
+  aspect-ratio: 1 / 1;
+  overflow: hidden;
 }
 
 .product-grid .product-card--has-image .product-image {
   width: 100% !important;
   min-width: 100% !important;
   max-width: 100% !important;
-  height: 104px !important;
-  min-height: 104px !important;
-  max-height: 104px !important;
+  height: 100% !important;
+  aspect-ratio: auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
   margin-bottom: 0;
   flex-shrink: 0;
+  border-radius: 12px;
+}
+
+/* "+" de agregar: arriba a la derecha en tarjetas con imagen (el info va abajo) */
+.product-grid .product-card--has-image .product-add-overlay {
+  top: 6px;
+  bottom: auto;
+}
+
+/* Badges de stock superpuestos (si estuvieran en flujo, el overflow los recorta) */
+.product-grid .product-card--has-image .product-stock-warning,
+.product-grid .product-card--has-image .product-stock-out {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 3;
+  margin: 0;
 }
 
 /* Overlay "+" en imagen: indica que es zona de agregar al tocar */
@@ -1462,26 +1488,41 @@ html, body {
   pointer-events: none;
 }
 
-/* Precio dentro de la imagen: evita overflow y mejora visibilidad */
-.product-price-overlay {
+/* Nombre + precio dentro de la imagen, sobre un degradado para legibilidad */
+.product-info-overlay {
   position: absolute;
   bottom: 0;
   left: 0;
   right: 0;
-  padding: 0.35rem 0.5rem;
-  background: linear-gradient(to top, rgba(0, 0, 0, 0.75), transparent);
-  color: white;
-  font-weight: 700;
-  font-size: 0.9rem;
-  text-align: center;
-  line-height: 1.2;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  padding: 0.4rem 0.5rem 0.45rem;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.88) 0%, rgba(0, 0, 0, 0.45) 55%, transparent 100%);
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  text-align: left;
   pointer-events: none;
 }
 
-.product-price-overlay .product-variants-badge {
+.product-overlay-name {
+  font-weight: 600;
+  font-size: 0.82rem;
+  line-height: 1.15;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+
+.product-overlay-price {
+  font-weight: 800;
+  font-size: 1rem;
+  line-height: 1.2;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+
+.product-info-overlay .product-variants-badge {
   margin-left: 0.15rem;
   opacity: 0.95;
 }
@@ -2091,7 +2132,9 @@ html, body {
   }
   
   .product-grid {
-    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(min(120px, 100%), 1fr));
+    gap: 0.6rem;
+    padding: 0.6rem;
   }
 }
 
@@ -12329,3 +12372,492 @@ html, body {
     transform: rotate(360deg);
   }
 }
+
+/* =========================================================================
+   Modo kiosko / touch — targets grandes para pantallas táctiles dedicadas.
+   Se activa con la clase `kiosk-mode` en <body> (ver src/hooks/useKioskMode.ts).
+   ========================================================================= */
+.kiosk-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #fff;
+  color: #374151;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+.kiosk-toggle-btn:hover {
+  background: #f3f4f6;
+  border-color: #d1d5db;
+}
+.kiosk-toggle-btn.active {
+  background: #059669;
+  border-color: #059669;
+  color: #fff;
+}
+
+/* Menos tarjetas por fila y más grandes (mejor legibilidad táctil / al hacer zoom) */
+.kiosk-mode .product-grid {
+  grid-template-columns: repeat(auto-fill, minmax(min(240px, 100%), 1fr));
+  gap: 1.15rem;
+}
+.kiosk-mode .product-overlay-name {
+  font-size: 1.05rem;
+  -webkit-line-clamp: 2;
+}
+.kiosk-mode .product-overlay-price {
+  font-size: 1.35rem;
+}
+.kiosk-mode .product-grid .product-card--has-image .product-add-overlay {
+  width: 40px;
+  height: 40px;
+  font-size: 1.6rem;
+}
+
+/* Chips de categoría táctiles */
+.kiosk-mode .category-tab {
+  font-size: 1.05rem;
+  padding: 0.7rem 1.25rem;
+  border-radius: 999px;
+}
+
+/* Buscador y botones de la barra superior táctiles */
+.kiosk-mode .search-bar {
+  font-size: 1.15rem;
+  padding: 0.9rem 1rem;
+}
+.kiosk-mode .barcode-btn,
+.kiosk-mode .kiosk-toggle-btn {
+  width: 52px;
+  min-width: 52px;
+  height: 52px;
+}
+
+/* Botones del carrito táctiles (targets grandes para dedo) */
+.kiosk-mode .pos-cart button,
+.kiosk-mode .btn-primary {
+  min-height: 48px;
+  font-size: 1.05rem;
+}
+
+/* Salida del kiosko: botón discreto (candado) + modal de passcode ------------ */
+.kiosk-exit-btn {
+  position: fixed;
+  bottom: 12px;
+  left: 12px;
+  z-index: 4000;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(31, 41, 55, 0.35);
+  color: rgba(255, 255, 255, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0.4;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+.kiosk-exit-btn:hover {
+  opacity: 1;
+  background: rgba(31, 41, 55, 0.9);
+}
+
+.kiosk-exit-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 4100;
+}
+.kiosk-exit-modal {
+  background: #fff;
+  color: #111827;
+  border-radius: 14px;
+  padding: 1.5rem;
+  width: min(360px, 92vw);
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+  text-align: center;
+}
+.kiosk-exit-modal h3 { margin: 0 0 0.5rem; font-size: 1.15rem; }
+.kiosk-exit-modal p { margin: 0 0 1rem; color: #6b7280; font-size: 0.9rem; }
+.kiosk-exit-input {
+  width: 100%;
+  padding: 0.8rem 1rem;
+  font-size: 1.4rem;
+  text-align: center;
+  letter-spacing: 0.3em;
+  border: 1px solid #d1d5db;
+  border-radius: 10px;
+  box-sizing: border-box;
+}
+.kiosk-exit-input:focus { outline: none; border-color: #059669; }
+.kiosk-exit-error { color: #dc2626; font-size: 0.85rem; margin-top: 0.5rem; font-weight: 600; }
+.kiosk-exit-actions { display: flex; gap: 0.75rem; margin-top: 1.25rem; }
+.kiosk-exit-actions button {
+  flex: 1;
+  padding: 0.75rem;
+  border-radius: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  font-size: 1rem;
+}
+.kiosk-exit-cancel { background: #f3f4f6; color: #374151; }
+.kiosk-exit-confirm { background: #059669; color: #fff; }
+
+/* Configuración: estado de kiosko activo */
+.kiosk-status-active {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: #ecfdf5;
+  color: #047857;
+  border: 1px solid #a7f3d0;
+  padding: 0.6rem 1rem;
+  border-radius: 10px;
+  font-weight: 600;
+}
+.kiosk-activate-btn { display: inline-flex; align-items: center; gap: 0.5rem; }
+
+/* =========================================================================
+   KioskView — pantalla de autoservicio del cliente (réplica sin menú lateral,
+   recoloreada a la identidad BizneAI: verde esmeralda #059669).
+   ========================================================================= */
+.kioskv {
+  position: fixed;
+  inset: 0;
+  z-index: 1900;
+  display: flex;
+  flex-direction: column;
+  background: #f8fafc;
+  color: #111827;
+}
+
+.kioskv-header {
+  padding: 1.25rem 1.5rem 0.75rem;
+  background: #ffffff;
+  border-bottom: 1px solid #eef2f7;
+}
+.kioskv-search {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  border-radius: 999px;
+  padding: 0.7rem 1.1rem;
+  color: #64748b;
+}
+.kioskv-search input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  outline: none;
+  font-size: 1.05rem;
+  color: #111827;
+}
+.kioskv-search:focus-within {
+  border-color: #059669;
+  box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.12);
+}
+.kioskv-title {
+  margin: 1rem 0 0.15rem;
+  font-size: 1.9rem;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+.kioskv-subtitle {
+  margin: 0 0 0.85rem;
+  color: #64748b;
+  font-size: 0.95rem;
+}
+.kioskv-cats {
+  display: flex;
+  gap: 0.6rem;
+  overflow-x: auto;
+  padding-bottom: 0.5rem;
+  scrollbar-width: thin;
+}
+.kioskv-cat {
+  flex-shrink: 0;
+  padding: 0.6rem 1.3rem;
+  border-radius: 999px;
+  border: 2px solid #e2e8f0;
+  background: #fff;
+  color: #334155;
+  font-weight: 600;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+.kioskv-cat:hover { border-color: #10b981; }
+.kioskv-cat.active {
+  border-color: #059669;
+  background: #ecfdf5;
+  color: #047857;
+}
+
+.kioskv-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+.kioskv-grid {
+  flex: 1;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(170px, 100%), 1fr));
+  gap: 1rem;
+  padding: 1.25rem 1.5rem;
+  align-content: start;
+}
+.kioskv-empty {
+  grid-column: 1 / -1;
+  text-align: center;
+  color: #94a3b8;
+  padding: 3rem 1rem;
+  font-size: 1.05rem;
+}
+
+.kioskv-card {
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border: 1px solid #eef2f7;
+  border-radius: 14px;
+  overflow: hidden;
+  cursor: pointer;
+  text-align: left;
+  padding: 0;
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  -webkit-tap-highlight-color: rgba(5, 150, 105, 0.2);
+}
+.kioskv-card:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(0, 0, 0, 0.1); }
+.kioskv-card:active { transform: scale(0.98); }
+.kioskv-card-img {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  background: #f1f5f9;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.kioskv-card-img img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.kioskv-card-initial {
+  font-size: 2.5rem;
+  font-weight: 800;
+  color: #cbd5e1;
+}
+.kioskv-badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 2;
+  background: #059669;
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+.kioskv-card-name {
+  padding: 0.6rem 0.75rem 0.1rem;
+  font-weight: 600;
+  font-size: 0.95rem;
+  line-height: 1.2;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.kioskv-card-price {
+  padding: 0.1rem 0.75rem 0.7rem;
+  color: #059669;
+  font-weight: 800;
+  font-size: 1.05rem;
+}
+
+.kioskv-az {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.1rem;
+  padding: 0.5rem 0.35rem;
+  overflow-y: auto;
+}
+.kioskv-az-letter {
+  border: none;
+  background: transparent;
+  color: #059669;
+  font-weight: 700;
+  font-size: 0.9rem;
+  cursor: pointer;
+  padding: 0.1rem 0.35rem;
+  border-radius: 6px;
+}
+.kioskv-az-letter:hover { background: #ecfdf5; }
+
+.kioskv-footer {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.9rem 1.5rem;
+  background: #fff;
+  border-top: 1px solid #eef2f7;
+  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.04);
+}
+.kioskv-total {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 1.35rem;
+  font-weight: 800;
+  color: #111827;
+}
+.kioskv-total svg { color: #059669; }
+.kioskv-order-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  background: #059669;
+  color: #fff;
+  border: none;
+  border-radius: 12px;
+  padding: 1rem 1.5rem;
+  font-size: 1.15rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.kioskv-order-btn:hover:not(:disabled) { background: #047857; }
+.kioskv-order-btn:disabled { background: #cbd5e1; cursor: not-allowed; }
+.kioskv-count {
+  background: rgba(255, 255, 255, 0.25);
+  border-radius: 999px;
+  padding: 0.1rem 0.6rem;
+  font-size: 0.95rem;
+}
+
+/* Panel "Ver mi pedido" (slide-up) */
+.kioskv-order-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1950;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+.kioskv-order-panel {
+  background: #fff;
+  width: min(720px, 100%);
+  max-height: 88vh;
+  border-radius: 18px 18px 0 0;
+  display: flex;
+  flex-direction: column;
+  animation: kioskv-slide-up 0.2s ease;
+}
+@keyframes kioskv-slide-up {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+.kioskv-order-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1.1rem 1.5rem;
+  border-bottom: 1px solid #eef2f7;
+}
+.kioskv-order-head h2 { margin: 0; font-size: 1.4rem; font-weight: 800; }
+.kioskv-order-close {
+  border: none;
+  background: #f1f5f9;
+  border-radius: 10px;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: #475569;
+}
+.kioskv-order-items { flex: 1; overflow-y: auto; padding: 0.5rem 1.5rem; }
+.kioskv-order-item {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.85rem 0;
+  border-bottom: 1px solid #f1f5f9;
+}
+.kioskv-order-item-info { flex: 1; min-width: 0; }
+.kioskv-order-item-name { font-weight: 600; }
+.kioskv-order-item-variant { color: #64748b; font-size: 0.85rem; }
+.kioskv-order-item-price { color: #64748b; font-size: 0.9rem; }
+.kioskv-order-item-qty {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.kioskv-order-item-qty button {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  border: 1px solid #e2e8f0;
+  background: #fff;
+  color: #059669;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.kioskv-order-item-qty span { min-width: 1.5rem; text-align: center; font-weight: 700; }
+.kioskv-order-item-remove { color: #ef4444 !important; }
+.kioskv-order-item-total { font-weight: 800; min-width: 4.5rem; text-align: right; }
+.kioskv-order-summary {
+  padding: 1rem 1.5rem 1.5rem;
+  border-top: 1px solid #eef2f7;
+  background: #f8fafc;
+}
+.kioskv-order-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.25rem 0;
+  color: #475569;
+}
+.kioskv-order-row-total {
+  font-size: 1.25rem;
+  font-weight: 800;
+  color: #111827;
+  padding-top: 0.6rem;
+}
+.kioskv-pay-btn {
+  width: 100%;
+  margin-top: 1rem;
+  background: #059669;
+  color: #fff;
+  border: none;
+  border-radius: 12px;
+  padding: 1.1rem;
+  font-size: 1.2rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+.kioskv-pay-btn:hover:not(:disabled) { background: #047857; }
+.kioskv-pay-btn:disabled { background: #cbd5e1; cursor: not-allowed; }

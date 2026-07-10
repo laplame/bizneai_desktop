@@ -1,3 +1,17 @@
+/**
+ * ⚠️  MOCK / LEGACY ROUTE — NOT the source of truth for the desktop POS.
+ *
+ * This router keeps an in-memory array that RESETS on every restart. It is a
+ * vestige of the forked BizneAI cloud API and is NOT how the desktop app
+ * persists data. Do not build features against it assuming durability.
+ *
+ * Real desktop data flow:
+ *   localStorage  →  PUT/GET /api/pos/kv (posKvRoutes)  →  SQLite (pos-local-store)
+ *   catalog/stock →  MCP proxy /api/proxy (mcpProxyRoutes)
+ *   sales ledger  →  /api/merkle-ledger (merkleLedgerRoutes)  +  local-activity DB
+ * See docs/ARCHITECTURE.md for the full picture.
+ */
+
 import express from 'express';
 import { z } from 'zod';
 import multer from 'multer';

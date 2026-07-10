@@ -20,22 +20,8 @@ import {
   CreditCard
 } from 'lucide-react';
 
-interface CartItem {
-  product: {
-    id: number;
-    name: string;
-    price: number;
-    category: string;
-    stock: number;
-    barcode?: string;
-    priceIncludesTax?: boolean;
-    taxExempt?: boolean;
-  };
-  quantity: number;
-  itemTotal?: number;
-  unitPrice?: number;
-  variantDisplayName?: string;
-}
+// Canonical POS cart item (was a minimal inline shape here). See src/types/domain.ts.
+import type { CartItem } from '../types/domain';
 
 interface VirtualTicketProps {
   isOpen: boolean;
