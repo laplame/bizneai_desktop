@@ -502,6 +502,11 @@ export const mapMcpProductToLocal = (mcpProduct: unknown, index: number = 0): Re
     priceIncludesTax: typeof p.priceIncludesTax === 'boolean' ? p.priceIncludesTax : undefined,
     taxExempt: typeof p.taxExempt === 'boolean' ? p.taxExempt : undefined,
     components: getComponentsFromProductRecord(p),
+    isConsignment: Boolean(p.isConsignment),
+    consignmentSupplier: p.consignmentSupplier != null ? String(p.consignmentSupplier) : undefined,
+    consignmentUnitCost:
+      typeof p.consignmentUnitCost === 'number' ? p.consignmentUnitCost : Number(p.consignmentUnitCost) || undefined,
+    consignmentNotes: p.consignmentNotes != null ? String(p.consignmentNotes) : undefined,
   };
 };
 

@@ -32,6 +32,7 @@ import { printReceiptThermalOrDialog, resolveStoreNameForPrint } from '../servic
 import type { ReceiptPrintData } from '../services/receiptPrintService';
 import type { SaleFulfillmentState } from '../types/saleWaitlistCredit';
 import { releaseWaitlistReservation } from '../services/waitlistInventory';
+import { kitchenWaitlistSocketService } from '../services/kitchenWaitlistSocketService';
 import {
   dedupeWaitlistRowsById,
   filterStaleMarketingWaitlistRows,
@@ -87,6 +88,9 @@ interface WaitlistEntry {
   timestamp: string;
   partySize?: number;
   estimatedWaitTime?: number;
+  tableNumber?: string;
+  waiterName?: string;
+  waiterId?: string;
 }
 
 interface WaitlistProps {
@@ -293,6 +297,23 @@ const Waitlist: React.FC<WaitlistProps> = ({ isOpen, onClose, onLoadToCart }) =>
       void loadWaitlistEntries();
     }
   }, [isOpen, loadWaitlistEntries]);
+
+  // Tiempo real: el mesero manda una orden por waitlist (u otra terminal
+  // cambia su estado/la cancela) → refresca al instante en vez de depender
+  // solo del refresco manual o de reabrir el modal.
+  useEffect(() => {
+    if (!isOpen) return;
+    const shopIdForSocket = resolveWaitlistShopId(storeIdentifiers);
+    if (!shopIdForSocket) return;
+
+    kitchenWaitlistSocketService.connect(shopIdForSocket);
+    const refresh = () => void loadWaitlistEntries();
+    kitchenWaitlistSocketService.on('waitlist-updated', refresh);
+
+    return () => {
+      kitchenWaitlistSocketService.off('waitlist-updated', refresh);
+    };
+  }, [isOpen, storeIdentifiers._id, storeIdentifiers.shopId, loadWaitlistEntries]);
 
   const saveLocalWaitlist = (newEntries: WaitlistEntry[]) => {
     localStorage.setItem('bizneai-waitlist', JSON.stringify(newEntries));
@@ -515,6 +536,12 @@ const Waitlist: React.FC<WaitlistProps> = ({ isOpen, onClose, onLoadToCart }) =>
       <div className="waitlist-card-header">
         <div className="waitlist-card-title">
           <h3>{entry.name}</h3>
+          {(entry.tableNumber || entry.waiterName) && (
+            <p className="waitlist-card-meta" style={{ margin: '4px 0 0', opacity: 0.85, fontSize: '0.9rem' }}>
+              {entry.tableNumber ? `Mesa ${entry.tableNumber}` : 'Mesa —'}
+              {entry.waiterName ? ` · Mesero: ${entry.waiterName}` : ''}
+            </p>
+          )}
           <span
             className="status-badge"
             style={{ background: getStatusColor(entry.status) + '20', color: getStatusColor(entry.status) }}

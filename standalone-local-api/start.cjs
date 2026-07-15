@@ -2,7 +2,7 @@
 /**
  * Arranca el bundle bizneai-server.cjs desde esta carpeta (mismo Node que instaló better-sqlite3).
  * Variables útiles:
- *   PORT          — puerto (default 3000)
+ *   PORT          — puerto (default 3001)
  *   BIZNEAI_USER_DATA — carpeta de datos (SQLite, uploads); por defecto ./data junto a este script
  *   BIZNEAI_EMBEDDED  — se fuerza a 1 si no viene definida
  */
@@ -33,7 +33,7 @@ if (!fs.existsSync(bundlePath)) {
 // eslint-disable-next-line import/no-dynamic-require
 const mod = require(bundlePath);
 
-const port = Number(process.env.PORT) || 3000;
+const port = Number(process.env.PORT) || 3001;
 mod.startBizneaiServer(port).catch((err) => {
   console.error('[bizneai-local-api]', err);
   process.exit(1);

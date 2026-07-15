@@ -55,7 +55,8 @@ import {
   Printer,
   User,
   Users,
-  Terminal
+  Terminal,
+  Diamond
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { storeAPI } from '../api/store';
@@ -67,7 +68,10 @@ import {
   mapMcpProductToLocal,
   mergeProductsFromServerPreserveImages,
   applyMcpInventoryStatusToMergedCatalog,
+  getShopId,
+  getMcpUrl,
 } from '../utils/shopIdHelper';
+import { getLocalApiOrigin, shouldUseSalesMcpProxy } from '../utils/localApiBase';
 import { extractMcpMethodsField, getMcpMethodsEndpointCount } from '../utils/mcpMethodsApi';
 import {
   setLastSyncTime,
@@ -97,8 +101,13 @@ import {
   flushMirroredKeysToServer,
   initPosPersistence,
   scheduleMirrorKeyToSqlite,
+  deleteKvFromServer,
+  wipeAllPosLocalData,
 } from '../services/posPersistService';
 import { syncProductImagesToLocalDisk } from '../services/productImageLocalCache';
+import { generatePolygonWallet, revealPolygonWalletMnemonic, getPolygonWallet } from '../api/cryptoWallet';
+import { syncShopCryptoAddresses } from '../api/shopCryptoSync';
+import { ensureShopSession, shopAuthLogin, clearShopSessionToken } from '../services/shopAuthService';
 import {
   setConfigAccessPassword,
   setConfigModifyPassword,
@@ -124,6 +133,8 @@ interface CryptoConfig {
   bitcoin?: string;
   ethereum?: string;
   solana?: string;
+  /** USDLXE (LUXAE) — dirección Polygon (0x + 40 hex), generada localmente o pegada a mano. */
+  luxae?: string;
 }
 
 interface BusinessHours {
@@ -131,7 +142,7 @@ interface BusinessHours {
 }
 
 const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => {
-  const { setStoreIdentifiers } = useStore();
+  const { setStoreIdentifiers, clearStoreIdentifiers } = useStore();
   // State for active section
   const [activeSection, setActiveSection] = useState<string>('store-info');
 
@@ -175,6 +186,16 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
     ecommerceEnabled: false,
     ecommerceUrl: ''
   });
+
+  // Wallet Polygon (USDLXE) generada localmente
+  const [polygonWalletLoading, setPolygonWalletLoading] = useState(false);
+  const [generatedWalletModal, setGeneratedWalletModal] = useState<{ address: string; mnemonic: string } | null>(null);
+  const [mnemonicRevealed, setMnemonicRevealed] = useState(false);
+
+  // Sync de "Pagos con Cripto" hacia sites/bizneaiWeb (PUT /api/shop/:id)
+  const [showCryptoSyncModal, setShowCryptoSyncModal] = useState(false);
+  const [cryptoSyncPasscode, setCryptoSyncPasscode] = useState('');
+  const [cryptoSyncLoading, setCryptoSyncLoading] = useState(false);
 
   // Tax Settings
   const [taxSettings, setTaxSettings] = useState<TaxSettings>({
@@ -279,6 +300,20 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
     }
   }, []);
 
+  // Cargar dirección Polygon (USDLXE) ya generada localmente, si existe
+  useEffect(() => {
+    const shopId = getShopId();
+    if (!shopId) return;
+    void getPolygonWallet(shopId).then((res) => {
+      if (res.success && res.data?.address) {
+        setPaymentSettings(prev => ({
+          ...prev,
+          cryptoAddresses: { ...prev.cryptoAddresses, luxae: res.data!.address },
+        }));
+      }
+    });
+  }, []);
+
   // Load configuration on mount
   useEffect(() => {
     const initializeConfig = async () => {
@@ -331,10 +366,8 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
     }
   };
 
-  // Build MCP URL from shop ID
-  // Always constructs the MCP URL regardless of input URL type
+  // Build MCP URL from shop ID (canonical production URL for storage)
   const buildMcpUrl = (shopId: string): string => {
-    // Extract base URL from the input, or use default
     let baseUrl = 'https://www.bizneai.com';
     
     try {
@@ -342,12 +375,21 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
         const urlObj = new URL(serverConfig.serverUrl);
         baseUrl = `${urlObj.protocol}//${urlObj.host}`;
       }
-    } catch (error) {
-      // If URL parsing fails, use default
+    } catch {
       console.warn('Could not parse base URL, using default');
     }
     
     return `${baseUrl}/api/mcp/${shopId}`;
+  };
+
+  /** En localhost/Electron reescribe a proxy :3000 para evitar CORS. */
+  const resolveMcpFetchUrl = (mcpUrl: string): string => {
+    if (!shouldUseSalesMcpProxy()) return mcpUrl;
+    const shopId = extractShopIdFromUrl(mcpUrl) || getShopId();
+    if (!shopId) return getMcpUrl() || mcpUrl;
+    const suffixMatch = mcpUrl.match(/\/api\/mcp\/[a-f0-9]{24}(.*)$/i);
+    const suffix = suffixMatch?.[1] || '';
+    return `${getLocalApiOrigin()}/api/proxy/mcp/${shopId}${suffix}`;
   };
 
   // Load server configuration from localStorage
@@ -405,7 +447,7 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
   const loadShopDataFromServer = async (mcpUrl: string) => {
     setIsLoading(true);
     try {
-      const response = await fetch(mcpUrl);
+      const response = await fetch(resolveMcpFetchUrl(mcpUrl));
       if (response.ok) {
         const result = await response.json();
         const shopData = result.data?.shop || result.shop;
@@ -549,7 +591,7 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
       
       // GET …/methods — data.methods puede ser { GET: [], POST: [], … }
       try {
-        const methodsUrl = `${mcpUrl}/methods`;
+        const methodsUrl = `${resolveMcpFetchUrl(mcpUrl)}/methods`;
         const response = await fetch(methodsUrl);
         if (response.ok) {
           const data = await response.json();
@@ -690,7 +732,8 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
         setPaymentSettings(prev => ({
           ...prev,
           ecommerceEnabled: config.ecommerceEnabled || false,
-          cryptoEnabled: config.crypto || false
+          cryptoEnabled: config.crypto || false,
+          cryptoAddresses: { ...prev.cryptoAddresses, ...(config.cryptoAddresses || {}) }
         }));
         setKitchenEnabled(config.kitchenEnabled ?? false);
         
@@ -969,19 +1012,137 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
       toast.error('Dirección Bitcoin inválida');
       return;
     }
-    if (crypto === 'ethereum' && !address.match(/^0x[a-fA-F0-9]{40}$/)) {
-      toast.error('Dirección Ethereum inválida');
+    if ((crypto === 'ethereum' || crypto === 'luxae') && !address.match(/^0x[a-fA-F0-9]{40}$/)) {
+      toast.error(crypto === 'luxae' ? 'Dirección Polygon (USDLXE) inválida — debe ser 0x + 40 hex' : 'Dirección Ethereum inválida');
       return;
     }
 
+    const updatedAddresses = {
+      ...paymentSettings.cryptoAddresses,
+      [crypto]: address
+    };
     setPaymentSettings(prev => ({
       ...prev,
-      cryptoAddresses: {
-        ...prev.cryptoAddresses,
-        [crypto]: address
-      }
+      cryptoAddresses: updatedAddresses
     }));
+
+    // Persistir de verdad — antes esto solo vivía en useState y se perdía en
+    // cada recarga/remount (loadConfiguration/loadShopDataFromServer pisaban
+    // el toggle y las direcciones nunca se habían guardado).
+    const acceptedCryptocurrencies = Object.keys(updatedAddresses).filter((k) => !!updatedAddresses[k]);
+    void storeAPI.updateConfig({ cryptoAddresses: updatedAddresses, acceptedCryptocurrencies }).then((res) => {
+      if (!res.success) {
+        toast.error(`Dirección ${crypto} guardada solo en esta sesión — no se pudo persistir`);
+      }
+    });
+
     toast.success(`Dirección ${crypto} guardada`);
+  };
+
+  /**
+   * Genera una wallet Polygon (EVM, 0x + 40 hex) nueva para USDLXE en el
+   * servidor local (nunca sale de esta máquina salvo respaldo manual del
+   * usuario). Requiere que el toggle "Habilitar pagos con criptomonedas" esté
+   * activo — misma regla de negocio que la app móvil, pero sin el bug de
+   * sombra de variable que ahí bloqueaba el flujo permanentemente.
+   */
+  const handleGeneratePolygonWallet = async (force = false) => {
+    if (!paymentSettings.cryptoEnabled) {
+      toast.error('Activa "Habilitar pagos con criptomonedas" antes de generar la dirección.');
+      return;
+    }
+    const shopId = getShopId();
+    if (!shopId) {
+      toast.error('Configura el ID de tienda antes de generar la wallet.');
+      return;
+    }
+    setPolygonWalletLoading(true);
+    const res = await generatePolygonWallet(shopId, force);
+    setPolygonWalletLoading(false);
+    if (res.success && res.data) {
+      handleSaveCryptoAddress('luxae', res.data.address);
+      setMnemonicRevealed(true);
+      setGeneratedWalletModal({ address: res.data.address, mnemonic: res.data.mnemonic });
+      toast.success('Wallet Polygon generada — respalda tu frase antes de cerrar este cuadro');
+    } else if (res.error === 'ALREADY_EXISTS') {
+      toast.error('Ya existe una wallet generada para esta tienda. Usa "Ver frase de nuevo" o fuerza una nueva.');
+    } else {
+      toast.error(res.error || 'No se pudo generar la wallet');
+    }
+  };
+
+  const handleRevealPolygonMnemonic = async () => {
+    const shopId = getShopId();
+    if (!shopId) return;
+    setPolygonWalletLoading(true);
+    const res = await revealPolygonWalletMnemonic(shopId);
+    setPolygonWalletLoading(false);
+    if (res.success && res.data) {
+      setMnemonicRevealed(true);
+      setGeneratedWalletModal({ address: res.data.address, mnemonic: res.data.mnemonic });
+    } else {
+      toast.error(res.error || 'No se pudo recuperar la frase');
+    }
+  };
+
+  /**
+   * Envía las direcciones configuradas en "Pagos con Cripto" a
+   * PUT /api/shop/:id (sites/bizneaiWeb) — mismo endpoint que usa la app
+   * móvil. Requiere el passcode del owner en cada llamada (nunca se cachea,
+   * el servidor lo usa para derivar la llave de cifrado).
+   */
+  const handleSyncCryptoToShop = async () => {
+    const shopId = getShopId();
+    if (!shopId) {
+      toast.error('Configura el ID de tienda antes de sincronizar.');
+      return;
+    }
+    if (!cryptoSyncPasscode.trim()) {
+      toast.error('Ingresa el passcode del owner.');
+      return;
+    }
+    if (!storeInfo.storeName.trim()) {
+      toast.error('Configura el nombre de la tienda antes de sincronizar (Información de la tienda).');
+      return;
+    }
+    const addresses: Record<string, string> = {};
+    Object.entries(paymentSettings.cryptoAddresses).forEach(([key, value]) => {
+      if (value && value.trim()) addresses[key] = value.trim();
+    });
+    if (Object.keys(addresses).length === 0) {
+      toast.error('No hay direcciones configuradas para sincronizar.');
+      return;
+    }
+    setCryptoSyncLoading(true);
+
+    // El passcode del owner sirve para dos cosas en la misma llamada: iniciar
+    // sesión de tienda (JWT, exigido por SHOP_AUTH_ENFORCE=enforce) y cifrar
+    // cryptoAddresses en el servidor.
+    const session = await ensureShopSession(storeInfo.storeName.trim(), cryptoSyncPasscode.trim());
+    if (!session.success) {
+      setCryptoSyncLoading(false);
+      toast.error(session.error || 'No se pudo iniciar sesión con la tienda');
+      return;
+    }
+
+    let res = await syncShopCryptoAddresses(shopId, addresses, Object.keys(addresses), cryptoSyncPasscode.trim());
+    if (!res.success && res.needsSession) {
+      clearShopSessionToken();
+      const retrySession = await shopAuthLogin(storeInfo.storeName.trim(), cryptoSyncPasscode.trim());
+      if (retrySession.success) {
+        res = await syncShopCryptoAddresses(shopId, addresses, Object.keys(addresses), cryptoSyncPasscode.trim());
+      } else {
+        res = { success: false, error: retrySession.error };
+      }
+    }
+    setCryptoSyncLoading(false);
+    if (res.success) {
+      toast.success('Direcciones sincronizadas con la tienda');
+      setShowCryptoSyncModal(false);
+      setCryptoSyncPasscode('');
+    } else {
+      toast.error(res.error || 'No se pudo sincronizar — verifica el passcode del owner');
+    }
   };
 
   const handleSavePasscode = () => {
@@ -1046,11 +1207,60 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
     reader.readAsText(file);
   };
 
-  const handleClearAllData = () => {
-    if (window.confirm('¿Estás seguro de eliminar todos los datos? Esta acción no se puede deshacer.')) {
-      localStorage.clear();
-      toast.success('Todos los datos han sido eliminados');
+  const handleClearAllData = async () => {
+    if (
+      !window.confirm(
+        '¿Estás seguro de eliminar todos los datos?\n\n' +
+          'Se borrará localStorage y el espejo SQLite. Esta acción no se puede deshacer.'
+      )
+    ) {
+      return;
+    }
+    try {
+      toast.loading('Eliminando datos…', { id: 'wipe-pos' });
+      await wipeAllPosLocalData();
+      clearShopSessionToken();
+      clearStoreIdentifiers();
+      toast.success('Todos los datos han sido eliminados', { id: 'wipe-pos' });
       window.location.reload();
+    } catch (error) {
+      console.error('Error wiping POS data:', error);
+      toast.error('No se pudieron eliminar todos los datos', { id: 'wipe-pos' });
+    }
+  };
+
+  /** Vuelve a la pantalla inicial para pegar de nuevo la URL de sync (shopId/MCP). */
+  const handleResetPosSetup = async () => {
+    const ok = window.confirm(
+      '¿Restablecer el POS a la configuración inicial?\n\n' +
+        'Se borrará la URL de sincronización, el shopId y el estado del asistente. ' +
+        'Después deberás volver a pegar la URL de sync.'
+    );
+    if (!ok) return;
+
+    try {
+      // App marca setup completo si existe bizneai-setup-complete O bizneai-store-config.
+      // También hay que limpiar server-config / identifiers o la URL vieja sigue cargada.
+      const keysToClear = [
+        'bizneai-setup-complete',
+        'bizneai-server-config',
+        'bizneai-store-identifiers',
+        'bizneai-store-config',
+      ] as const;
+
+      for (const key of keysToClear) {
+        localStorage.removeItem(key);
+        await deleteKvFromServer(key);
+      }
+
+      clearShopSessionToken();
+      clearStoreIdentifiers();
+
+      toast.success('POS restablecido. Configura de nuevo la URL de sync.');
+      window.location.reload();
+    } catch (error) {
+      console.error('Error resetting POS setup:', error);
+      toast.error('No se pudo restablecer el POS');
     }
   };
 
@@ -1613,7 +1823,11 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
               <input
                 type="checkbox"
                 checked={paymentSettings.ecommerceEnabled}
-                onChange={(e) => setPaymentSettings(prev => ({ ...prev, ecommerceEnabled: e.target.checked }))}
+                onChange={(e) => {
+                  const checked = e.target.checked;
+                  setPaymentSettings(prev => ({ ...prev, ecommerceEnabled: checked }));
+                  void storeAPI.updateConfig({ ecommerceEnabled: checked });
+                }}
               />
               <span>Habilitar eCommerce</span>
             </label>
@@ -1639,14 +1853,86 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
               <input
                 type="checkbox"
                 checked={paymentSettings.cryptoEnabled}
-                onChange={(e) => setPaymentSettings(prev => ({ ...prev, cryptoEnabled: e.target.checked }))}
+                onChange={(e) => {
+                  const checked = e.target.checked;
+                  setPaymentSettings(prev => ({ ...prev, cryptoEnabled: checked }));
+                  void storeAPI.updateConfig({ crypto: checked }).then((res) => {
+                    if (!res.success) toast.error('No se pudo guardar la preferencia de pagos con cripto');
+                  });
+                }}
               />
               <span>Habilitar pagos con criptomonedas</span>
             </label>
           </div>
           {paymentSettings.cryptoEnabled && (
             <div className="crypto-settings">
-              <h4>Direcciones de Criptomonedas</h4>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem' }}>
+                <h4 style={{ margin: 0 }}>Direcciones de Criptomonedas</h4>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => setShowCryptoSyncModal(true)}
+                  disabled={Object.values(paymentSettings.cryptoAddresses).every((v) => !v)}
+                >
+                  <RefreshCw size={16} />
+                  Sincronizar con la tienda
+                </button>
+              </div>
+
+              {/* USDLXE (LUXAE) — dirección Polygon, generada localmente o pegada a mano */}
+              <div className="crypto-address-group">
+                <div className="crypto-header">
+                  <Diamond size={20} color="#8B5CF6" />
+                  <span>USDLXE</span>
+                  <span className={`crypto-status ${paymentSettings.cryptoAddresses.luxae ? 'configured' : 'not-configured'}`}>
+                    {paymentSettings.cryptoAddresses.luxae ? 'Configurado' : 'No configurado'}
+                  </span>
+                </div>
+                <p style={{ fontSize: '0.8rem', opacity: 0.75, margin: '0.25rem 0 0.5rem' }}>
+                  Dirección Polygon (0x…, misma familia que MetaMask) para recibir USDLXE de ventas con
+                  el programa de cashback CryptoMkt.
+                </p>
+                <div className="crypto-input-group">
+                  <input
+                    type="text"
+                    value={paymentSettings.cryptoAddresses.luxae || ''}
+                    onChange={(e) => {
+                      const newAddresses = { ...paymentSettings.cryptoAddresses, luxae: e.target.value };
+                      setPaymentSettings(prev => ({ ...prev, cryptoAddresses: newAddresses }));
+                    }}
+                    placeholder="0x... (pegar dirección existente)"
+                  />
+                  <button
+                    onClick={() => handleSaveCryptoAddress('luxae', paymentSettings.cryptoAddresses.luxae || '')}
+                    className="btn-secondary"
+                    disabled={!paymentSettings.cryptoAddresses.luxae}
+                  >
+                    <Save size={16} />
+                    Guardar
+                  </button>
+                </div>
+                <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem', flexWrap: 'wrap' }}>
+                  <button
+                    onClick={() => void handleGeneratePolygonWallet(!!paymentSettings.cryptoAddresses.luxae)}
+                    className="btn-secondary"
+                    disabled={polygonWalletLoading}
+                  >
+                    <Zap size={16} />
+                    {polygonWalletLoading
+                      ? 'Generando...'
+                      : paymentSettings.cryptoAddresses.luxae
+                        ? 'Generar wallet nueva'
+                        : 'Generar dirección Polygon'}
+                  </button>
+                  {paymentSettings.cryptoAddresses.luxae && (
+                    <button onClick={() => void handleRevealPolygonMnemonic()} className="btn-secondary" disabled={polygonWalletLoading}>
+                      <Eye size={16} />
+                      Ver frase de nuevo
+                    </button>
+                  )}
+                </div>
+              </div>
+
               {['bitcoin', 'ethereum', 'solana'].map((crypto) => {
                 const address = paymentSettings.cryptoAddresses[crypto as keyof CryptoConfig] || '';
                 const isConfigured = !!address;
@@ -1690,6 +1976,135 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
                   </div>
                 );
               })}
+            </div>
+          )}
+
+          {generatedWalletModal && (
+            <div className="modal-overlay" onClick={() => { setGeneratedWalletModal(null); setMnemonicRevealed(false); }}>
+              <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+                <div className="modal-header">
+                  <h3>
+                    <Diamond size={20} color="#8B5CF6" style={{ verticalAlign: 'text-bottom', marginRight: 8 }} />
+                    Respalda tu wallet Polygon
+                  </h3>
+                  <button className="close-btn" onClick={() => { setGeneratedWalletModal(null); setMnemonicRevealed(false); }}>
+                    <X size={20} />
+                  </button>
+                </div>
+                <div className="modal-body">
+                  <p style={{ color: '#dc2626', fontWeight: 600, marginBottom: '1rem' }}>
+                    Guarda esta frase en un lugar seguro fuera de esta computadora. Cualquiera que la tenga
+                    puede mover los fondos de esta dirección. BizneAI no puede recuperarla por ti.
+                  </p>
+                  <div className="form-group">
+                    <label>Dirección de recepción</label>
+                    <input type="text" readOnly value={generatedWalletModal.address} />
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      style={{ marginTop: '0.5rem' }}
+                      onClick={() => {
+                        navigator.clipboard.writeText(generatedWalletModal.address);
+                        toast.success('Dirección copiada');
+                      }}
+                    >
+                      <Copy size={16} />
+                      Copiar dirección
+                    </button>
+                  </div>
+                  <div className="form-group">
+                    <label>Frase mnemónica (12 palabras)</label>
+                    {mnemonicRevealed ? (
+                      <textarea
+                        readOnly
+                        value={generatedWalletModal.mnemonic}
+                        rows={3}
+                        style={{ width: '100%', fontFamily: 'monospace', fontSize: '0.9rem' }}
+                      />
+                    ) : (
+                      <button type="button" className="btn-secondary" onClick={() => setMnemonicRevealed(true)}>
+                        <Eye size={16} />
+                        Mostrar frase
+                      </button>
+                    )}
+                    {mnemonicRevealed && (
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        style={{ marginTop: '0.5rem' }}
+                        onClick={() => {
+                          navigator.clipboard.writeText(generatedWalletModal.mnemonic);
+                          toast.success('Frase copiada — guárdala y borra el portapapeles después');
+                        }}
+                      >
+                        <Copy size={16} />
+                        Copiar frase
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <div className="modal-footer">
+                  <button
+                    className="btn-primary"
+                    onClick={() => { setGeneratedWalletModal(null); setMnemonicRevealed(false); }}
+                  >
+                    Ya respaldé mi frase
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {showCryptoSyncModal && (
+            <div
+              className="modal-overlay"
+              onClick={() => { setShowCryptoSyncModal(false); setCryptoSyncPasscode(''); }}
+            >
+              <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+                <div className="modal-header">
+                  <h3>Sincronizar con la tienda</h3>
+                  <button
+                    className="close-btn"
+                    onClick={() => { setShowCryptoSyncModal(false); setCryptoSyncPasscode(''); }}
+                  >
+                    <X size={20} />
+                  </button>
+                </div>
+                <div className="modal-body">
+                  <p style={{ fontSize: '0.875rem', opacity: 0.8, marginBottom: '1rem' }}>
+                    Envía las direcciones configuradas arriba a sites/bizneaiWeb, cifradas con una
+                    llave derivada del passcode del owner. El passcode no se guarda — se pide en
+                    cada sincronización.
+                  </p>
+                  <div className="form-group">
+                    <label>Passcode del owner</label>
+                    <input
+                      type="password"
+                      value={cryptoSyncPasscode}
+                      onChange={(e) => setCryptoSyncPasscode(e.target.value)}
+                      placeholder="****"
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') void handleSyncCryptoToShop();
+                      }}
+                    />
+                  </div>
+                </div>
+                <div className="modal-footer">
+                  <button
+                    className="btn-secondary"
+                    onClick={() => { setShowCryptoSyncModal(false); setCryptoSyncPasscode(''); }}
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    className="btn-primary"
+                    onClick={() => void handleSyncCryptoToShop()}
+                    disabled={cryptoSyncLoading || !cryptoSyncPasscode.trim()}
+                  >
+                    {cryptoSyncLoading ? 'Sincronizando...' : 'Sincronizar'}
+                  </button>
+                </div>
+              </div>
             </div>
           )}
         </div>
@@ -2366,8 +2781,10 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
         { alwaysInteractive: true }
       )}
 
-      {/* Utilities Section */}
-      {renderSection('utilities', 'Utilidades', <Database size={20} />,
+      {renderSection(
+        'utilities',
+        'Utilidades',
+        <Database size={20} />,
         <div className="settings-form">
           <div className="utility-buttons">
             <button onClick={handleExportData} className="btn-secondary">
@@ -2379,16 +2796,11 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
               Importar Datos
               <input type="file" accept=".json" onChange={handleImportData} style={{ display: 'none' }} />
             </label>
-            <button onClick={() => {
-              if (window.confirm('¿Restablecer el asistente de configuración?')) {
-                localStorage.removeItem('bizneai-setup-complete');
-                toast.success('Asistente restablecido');
-              }
-            }} className="btn-secondary">
+            <button onClick={() => void handleResetPosSetup()} className="btn-secondary" title="Vuelve a la pantalla inicial para configurar la URL de sync">
               <RotateCcw size={16} />
-              Restablecer Asistente
+              Restablecer POS
             </button>
-            <button onClick={handleClearAllData} className="btn-danger">
+            <button onClick={() => void handleClearAllData()} className="btn-danger">
               <Trash2 size={16} />
               Eliminar Todos los Datos
             </button>
@@ -2397,7 +2809,12 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
               Contactar Desarrollador
             </button>
           </div>
-        </div>
+          <p className="settings-hint" style={{ marginTop: '0.75rem' }}>
+            <strong>Restablecer POS</strong> borra la sincronización (URL/shopId) y vuelve al asistente
+            inicial. No borra catálogo ni ventas locales; usa «Eliminar Todos los Datos» para un borrado total.
+          </p>
+        </div>,
+        { alwaysInteractive: true }
       )}
 
       {/* Actions - Sticky Footer */}

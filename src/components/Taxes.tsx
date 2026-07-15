@@ -23,6 +23,8 @@ import { toast } from 'react-hot-toast';
 import { getWhatsAppUrl } from '../constants/contact';
 import { storeAPI } from '../api/store';
 import { scheduleMirrorKeyToSqlite } from '../services/posPersistService';
+import { getShopId } from '../config/api';
+import { buildMcpResourceUrl } from '../utils/mcpResourceUrl';
 
 interface FiscalConfig {
   rfc: string;
@@ -51,6 +53,22 @@ interface Invoice {
   taxId?: string;
   type: 'income' | 'credit-note' | 'cancellation' | 'complement' | 'expense';
 }
+
+interface ServiceTicket {
+  _id: string;
+  ticketNumber?: string;
+  customerName: string;
+  status: string;
+  notes?: string;
+  createdAt: string;
+}
+
+const SERVICE_STATUS_LABELS: Record<string, string> = {
+  pending: 'Pendiente',
+  in_progress: 'En proceso',
+  completed: 'Completada',
+  cancelled: 'Cancelada',
+};
 
 interface TaxesProps {
   isOpen: boolean;
@@ -107,6 +125,12 @@ const Taxes: React.FC<TaxesProps> = ({ isOpen, onClose }) => {
   const [invoiceHistory, setInvoiceHistory] = useState<Invoice[]>([]);
   const [invoiceFilter, setInvoiceFilter] = useState<'all' | Invoice['type']>('all');
   const [isLoadingInvoices, setIsLoadingInvoices] = useState(false);
+  const [serviceTickets, setServiceTickets] = useState<ServiceTicket[]>([]);
+  const [serviceTicketFilter, setServiceTicketFilter] = useState<
+    '' | 'pending' | 'in_progress' | 'completed' | 'cancelled'
+  >('');
+  const [serviceTicketCounts, setServiceTicketCounts] = useState<Record<string, number>>({});
+  const [isLoadingServiceTickets, setIsLoadingServiceTickets] = useState(false);
 
   // Load tax rate from localStorage
   useEffect(() => {
@@ -122,8 +146,67 @@ const Taxes: React.FC<TaxesProps> = ({ isOpen, onClose }) => {
       }
       
       loadInvoiceHistory();
+      loadServiceTickets();
     }
   }, [isOpen]);
+
+  const loadServiceTickets = async () => {
+    const shopId = getShopId();
+    if (!shopId) {
+      setServiceTickets([]);
+      setServiceTicketCounts({});
+      return;
+    }
+
+    setIsLoadingServiceTickets(true);
+    try {
+      const statuses = ['pending', 'in_progress', 'completed', 'cancelled'] as const;
+      const countEntries = await Promise.all(
+        statuses.map(async (status) => {
+          const url = buildMcpResourceUrl(shopId, 'service-tickets', {
+            type: 'billing',
+            status,
+            limit: 1,
+            page: 1,
+          });
+          const res = await fetch(url);
+          const json = await res.json();
+          return [status, json.success ? json.data?.total ?? 0 : 0] as const;
+        })
+      );
+      const counts: Record<string, number> = Object.fromEntries(countEntries);
+      const allUrl = buildMcpResourceUrl(shopId, 'service-tickets', {
+        type: 'billing',
+        limit: 1,
+        page: 1,
+      });
+      const allRes = await fetch(allUrl);
+      const allJson = await allRes.json();
+      counts.all = allJson.success ? allJson.data?.total ?? 0 : 0;
+      setServiceTicketCounts(counts);
+
+      const listUrl = buildMcpResourceUrl(shopId, 'service-tickets', {
+        type: 'billing',
+        status: serviceTicketFilter || undefined,
+        limit: 20,
+        page: 1,
+      });
+      const listRes = await fetch(listUrl);
+      const listJson = await listRes.json();
+      setServiceTickets(listJson.success ? listJson.data?.tickets ?? [] : []);
+    } catch (error) {
+      console.error('Error loading service tickets:', error);
+      setServiceTickets([]);
+    } finally {
+      setIsLoadingServiceTickets(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isOpen && activeTab === 'history') {
+      loadServiceTickets();
+    }
+  }, [serviceTicketFilter, activeTab, isOpen]);
 
   const loadInvoiceHistory = async () => {
     setIsLoadingInvoices(true);
@@ -257,7 +340,7 @@ Por favor, ayúdame a configurar la facturación electrónica.`;
     <div className="taxes-overlay">
       <div className="taxes-modal">
         <div className="taxes-header">
-          <h2>Impuestos</h2>
+          <h2>Facturación</h2>
           <button className="close-btn" onClick={onClose}>
             <X size={20} />
           </button>
@@ -435,6 +518,71 @@ Por favor, ayúdame a configurar la facturación electrónica.`;
           {/* Invoice History Tab */}
           {activeTab === 'history' && (
             <div className="taxes-section">
+              <div className="service-tickets-section" style={{ marginBottom: '1.5rem' }}>
+                <h3 style={{ marginBottom: '0.75rem' }}>Solicitudes de factura</h3>
+                <div className="invoice-filters" style={{ marginBottom: '0.75rem' }}>
+                  {([
+                    ['', 'Todas', 'all'],
+                    ['pending', 'Pendientes', 'pending'],
+                    ['in_progress', 'En proceso', 'in_progress'],
+                    ['completed', 'Completadas', 'completed'],
+                    ['cancelled', 'Canceladas', 'cancelled'],
+                  ] as const).map(([key, label, countKey]) => (
+                    <button
+                      key={key || 'all'}
+                      className={`filter-btn ${serviceTicketFilter === key ? 'active' : ''}`}
+                      onClick={() => setServiceTicketFilter(key)}
+                    >
+                      {label}
+                      {serviceTicketCounts[countKey] != null ? ` (${serviceTicketCounts[countKey]})` : ''}
+                    </button>
+                  ))}
+                </div>
+
+                {isLoadingServiceTickets ? (
+                  <div className="empty-state">
+                    <RefreshCw size={32} className="spinner" />
+                    <p>Cargando solicitudes...</p>
+                  </div>
+                ) : serviceTickets.length === 0 ? (
+                  <div className="empty-state" style={{ padding: '1rem 0' }}>
+                    <FileText size={32} style={{ opacity: 0.5 }} />
+                    <p>
+                      {serviceTicketFilter === 'pending'
+                        ? 'No hay facturas pendientes'
+                        : 'No hay solicitudes de factura'}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="invoice-list">
+                    {serviceTickets.map((ticket) => (
+                      <div key={ticket._id} className="invoice-card">
+                        <div className="invoice-header">
+                          <div>
+                            <h4>Folio #{ticket.ticketNumber || ticket._id.slice(-8)}</h4>
+                            <span className="invoice-date">
+                              {ticket.createdAt
+                                ? new Date(ticket.createdAt).toLocaleString('es-MX')
+                                : '-'}
+                            </span>
+                          </div>
+                          <span className="invoice-type">
+                            {SERVICE_STATUS_LABELS[ticket.status] || ticket.status}
+                          </span>
+                        </div>
+                        <div className="invoice-body">
+                          <div className="invoice-info">
+                            <span><strong>Cliente:</strong> {ticket.customerName}</span>
+                            {ticket.notes && <span><strong>Notas:</strong> {ticket.notes}</span>}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <h3 style={{ marginBottom: '0.75rem' }}>Facturas CFDI emitidas</h3>
               <div className="invoice-filters">
                 <button
                   className={`filter-btn ${invoiceFilter === 'all' ? 'active' : ''}`}

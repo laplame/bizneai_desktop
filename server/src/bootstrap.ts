@@ -24,6 +24,7 @@ import posKvRoutes from './routes/posKvRoutes.js';
 import posProductImageRoutes from './routes/posProductImageRoutes.js';
 import localDbConsoleRoutes from './routes/localDbConsoleRoutes.js';
 import merkleLedgerRoutes from './routes/merkleLedgerRoutes.js';
+import cryptoWalletRoutes from './routes/cryptoWalletRoutes.js';
 
 import { errorHandler } from './middleware/errorHandler.js';
 import { notFound } from './middleware/notFound.js';
@@ -57,7 +58,7 @@ function buildBizneaiApp(): { app: express.Express; server: HttpServer; io: Serv
           imgSrc: ["'self'", "data:", 'https:', 'http:'],
         },
       },
-      /** Permite <img> desde Vite (5173) / Electron hacia API en :3000 */
+      /** Permite <img> desde Vite (5174) / Electron hacia API en :3001 */
       crossOriginResourcePolicy: { policy: 'cross-origin' },
     })
   );
@@ -66,7 +67,15 @@ function buildBizneaiApp(): { app: express.Express; server: HttpServer; io: Serv
     ? { origin: true, credentials: true }
     : isProd
       ? { origin: ['https://bizneai.com', 'https://www.bizneai.com'], credentials: true }
-      : { origin: ['http://localhost:3000', 'http://localhost:5173', 'http://127.0.0.1:5173', 'http://127.0.0.1:3000'], credentials: true };
+      : {
+          origin: [
+            'http://localhost:3001',
+            'http://localhost:5174',
+            'http://127.0.0.1:5174',
+            'http://127.0.0.1:3001',
+          ],
+          credentials: true,
+        };
 
   app.use(cors(corsOpts));
   app.use(morgan('combined'));
@@ -105,6 +114,7 @@ function buildBizneaiApp(): { app: express.Express; server: HttpServer; io: Serv
   // --- REAL routes: SQLite-backed persistence, the desktop POS source of truth ---
   app.use('/api/proxy', mcpProxyRoutes);              // proxy to remote MCP (catalog/stock)
   app.use('/api/merkle-ledger', merkleLedgerRoutes);  // sales ledger integrity
+  app.use('/api/local/crypto-wallet', cryptoWalletRoutes); // Polygon wallet local, cifrada en disco
   app.use('/api/local-activity', localActivityRoutes);// local activity DB
   app.use('/api/pos', posKvRoutes);                   // localStorage → SQLite KV mirror
   app.use('/api/pos', posProductImageRoutes);         // product images on disk
@@ -157,7 +167,7 @@ function buildBizneaiApp(): { app: express.Express; server: HttpServer; io: Serv
   return { app, server, io };
 }
 
-export async function startBizneaiServer(port = Number(process.env.PORT) || 3000): Promise<void> {
+export async function startBizneaiServer(port = Number(process.env.PORT) || 3001): Promise<void> {
   const { server } = buildBizneaiApp();
   await new Promise<void>((resolve, reject) => {
     const onErr = (err: NodeJS.ErrnoException) => {

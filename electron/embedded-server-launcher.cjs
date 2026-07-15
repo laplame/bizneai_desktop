@@ -12,7 +12,7 @@ const bundlePath = path.join(__dirname, '..', 'dist-backend', 'bizneai-server.cj
 // eslint-disable-next-line import/no-dynamic-require, @typescript-eslint/no-require-imports
 const mod = require(bundlePath);
 
-mod.startBizneaiServer(3000).catch((err) => {
+mod.startBizneaiServer(Number(process.env.PORT) || 3001).catch((err) => {
   console.error('[embedded-server-launcher]', err);
   process.exit(1);
 });

@@ -84,4 +84,11 @@ export interface ManagedProduct {
   components?: ProductComponentRow[];
   createdAt: string;
   updatedAt: string;
+  /** Producto en consignación: el proveedor cobra por unidad vendida. */
+  isConsignment?: boolean;
+  /** Nombre del proveedor / consignador. */
+  consignmentSupplier?: string;
+  /** Costo unitario a pagar al proveedor por cada unidad vendida (MXN). */
+  consignmentUnitCost?: number;
+  consignmentNotes?: string;
 }

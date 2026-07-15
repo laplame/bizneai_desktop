@@ -16,6 +16,12 @@ export * from './users';
 export * from './crypto';
 export * from './discountQr';
 export * from './roles';
+export * from './cashRegister';
+export * from './financialReports';
+export * from './purchaseOrders';
+export * from './consignment';
+export * from './cryptoWallet';
+export * from './shopCryptoSync';
 
 // Export types
 export type {

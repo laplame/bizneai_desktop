@@ -371,3 +371,82 @@ export const createSale = async (
     };
   }
 };
+
+export interface SalesOlapCell {
+  dimensions: Record<string, string | number | null>;
+  metrics: Record<string, number>;
+}
+
+export interface SalesOlapResult {
+  scope: { mode: 'shop' | 'shops' | 'all'; shopId?: string; shopIds?: string[] };
+  grain: string;
+  dimensions: string[];
+  measures: string[];
+  filters: Record<string, string | undefined>;
+  cells: SalesOlapCell[];
+  totals: Record<string, number>;
+  meta: { factCollection: string; cellCount: number; truncated: boolean };
+}
+
+/**
+ * OLAP de ventas — por tienda o multi-tienda.
+ * - Shop: GET /api/:shopId/sales/stats/olap
+ * - Multi / global: GET /api/reports/olap?allShops=true | shopIds=…
+ */
+export async function getSalesOlapStats(params: {
+  shopId?: string;
+  shopIds?: string[];
+  allShops?: boolean;
+  dateFrom?: string;
+  dateTo?: string;
+  grain?: 'hour' | 'day' | 'week' | 'month';
+  dimensions?: string;
+  measures?: string;
+  status?: string;
+  transactionType?: string;
+  paymentMethod?: string;
+  limit?: number;
+}): Promise<{ success: boolean; data?: SalesOlapResult; error?: string }> {
+  try {
+    const q = new URLSearchParams();
+    if (params.dateFrom) q.set('dateFrom', params.dateFrom);
+    if (params.dateTo) q.set('dateTo', params.dateTo);
+    if (params.grain) q.set('grain', params.grain);
+    if (params.dimensions) q.set('dimensions', params.dimensions);
+    if (params.measures) q.set('measures', params.measures);
+    if (params.status) q.set('status', params.status);
+    if (params.transactionType) q.set('transactionType', params.transactionType);
+    if (params.paymentMethod) q.set('paymentMethod', params.paymentMethod);
+    if (params.limit != null) q.set('limit', String(params.limit));
+
+    let path: string;
+    if (params.allShops || (params.shopIds && params.shopIds.length > 0) || !params.shopId) {
+      if (params.allShops) q.set('allShops', 'true');
+      if (params.shopIds?.length) q.set('shopIds', params.shopIds.join(','));
+      if (params.shopId && !params.allShops && !params.shopIds?.length) q.set('shopId', params.shopId);
+      path = `/reports/olap?${q}`;
+    } else {
+      path = `/${params.shopId}/sales/stats/olap?${q}`;
+    }
+    const url = shouldUseSalesMcpProxy()
+      ? `${getLocalApiOrigin()}/api/proxy/bizneai${path}`
+      : `${getApiOrigin()}/api${path}`;
+
+    const response = await fetch(url, {
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    });
+    const result = await parseJsonResponse(response);
+    if (!response.ok) {
+      return {
+        success: false,
+        error: String(result.error ?? result.message ?? `Error ${response.status}`),
+      };
+    }
+    return { success: true, data: (result.data ?? result) as SalesOlapResult };
+  } catch (err) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : 'Error de conexión',
+    };
+  }
+};

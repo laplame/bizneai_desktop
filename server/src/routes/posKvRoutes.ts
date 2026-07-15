@@ -116,6 +116,17 @@ router.delete('/kv', (req, res) => {
   }
 });
 
+/** Borra todo el espejo KV (reset / eliminar todos los datos del POS). */
+router.delete('/kv-all', (_req, res) => {
+  try {
+    const d = getPosKvDb();
+    d.prepare('DELETE FROM kv_store').run();
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
 const SHOP_ID_RE = /^[a-zA-Z0-9._-]{1,80}$/;
 const RESOURCE_RE = /^[a-zA-Z0-9._/@-]{1,120}$/;
 

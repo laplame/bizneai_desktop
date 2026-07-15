@@ -212,7 +212,7 @@ export interface KitchenOrder {
   items: KitchenOrderItem[];
   priority: 'low' | 'normal' | 'high' | 'urgent';
   estimatedTime: number;
-  status: 'pending' | 'preparing' | 'ready' | 'completed';
+  status: 'pending' | 'preparing' | 'ready' | 'served';
   createdAt: string;
   updatedAt: string;
 }
@@ -231,11 +231,11 @@ export interface CreateKitchenOrderRequest {
   items: KitchenOrderItem[];
   priority: 'low' | 'normal' | 'high' | 'urgent';
   estimatedTime: number;
-  status: 'pending' | 'preparing' | 'ready' | 'completed';
+  status: 'pending' | 'preparing' | 'ready' | 'served';
 }
 
 export interface KitchenOrderQueryParams extends PaginationParams, SortParams {
-  status?: 'pending' | 'preparing' | 'ready' | 'completed';
+  status?: 'pending' | 'preparing' | 'ready' | 'served';
   priority?: 'low' | 'normal' | 'high' | 'urgent';
   search?: string;
   dateFrom?: string;
@@ -255,6 +255,9 @@ export interface WaitlistEntry {
   notes?: string;
   customerInfo: CustomerInfo;
   timestamp: string;
+  tableNumber?: string;
+  waiterName?: string;
+  waiterId?: string;
   /** API waitlist (Mongoose): estimatedTime en documento. */
   estimatedTime?: number;
   /** GET /waitlist/orders (formato app): minutos transcurridos. */
@@ -292,6 +295,9 @@ export interface CreateWaitlistEntryRequest {
   customerInfo?: CustomerInfo;
   /** estimatedTime positivo entero (API); distinto de partySize del modal legacy. */
   estimatedTime?: number;
+  tableNumber?: string;
+  waiterName?: string;
+  waiterId?: string;
 }
 
 export interface WaitlistQueryParams extends PaginationParams, SortParams {

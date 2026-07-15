@@ -30,6 +30,8 @@ export const KEYS_TO_MIRROR = [
   'bizneai-store-types',
   'bizneai-pending-sales',
   'bizneai-inventory-csv-autobackup-day',
+  'bizneai-offline-write-queue',
+  'bizneai-cash-register-shadow',
 ] as const;
 
 const MIRROR_KEYS_SET = new Set<string>(KEYS_TO_MIRROR);
@@ -109,6 +111,36 @@ export async function deleteKvFromServer(key: string): Promise<boolean> {
   }
 }
 
+/** Borra todas las claves espejadas en SQLite (usado en “Eliminar todos los datos”). */
+export async function clearAllMirroredKvFromServer(): Promise<boolean> {
+  try {
+    const r = await fetch(`${getLocalApiOrigin()}/api/pos/kv-all`, { method: 'DELETE' });
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Wipe completo del POS local: localStorage + SQLite espejo.
+ * Marca sessionStorage para que el siguiente arranque no rehidrate desde SQLite.
+ */
+export async function wipeAllPosLocalData(): Promise<void> {
+  try {
+    sessionStorage.setItem('bizneai-skip-kv-hydrate', '1');
+  } catch {
+    /* ignore */
+  }
+  try {
+    localStorage.clear();
+  } catch {
+    /* ignore */
+  }
+  await clearAllMirroredKvFromServer();
+  // Por si kv-all no existe en builds viejos: borrar clave a clave
+  await Promise.all(KEYS_TO_MIRROR.map((key) => deleteKvFromServer(key)));
+}
+
 /**
  * Encola un PUT de una clave al SQLite local (debounce por clave).
  * Solo actúa si `key` está en KEYS_TO_MIRROR.
@@ -154,6 +186,15 @@ export async function flushMirroredKeysToServer(): Promise<void> {
 
 /** Si el servidor tiene datos y local no, hidrata localStorage. */
 export async function hydrateLocalFromServerIfEmpty(): Promise<void> {
+  try {
+    if (sessionStorage.getItem('bizneai-skip-kv-hydrate') === '1') {
+      sessionStorage.removeItem('bizneai-skip-kv-hydrate');
+      return;
+    }
+  } catch {
+    /* ignore */
+  }
+
   const hasProducts = (() => {
     try {
       const p = localStorage.getItem('bizneai-products');

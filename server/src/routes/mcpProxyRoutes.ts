@@ -221,6 +221,7 @@ const MCP_GET_SUBPATHS = [
   'inventory/status',
   'products',
   'purchase-orders',
+  'reports/consignment',
   'sales/stats',
   'sales',
   'tickets/stats',
@@ -253,6 +254,42 @@ function registerMcpGetProxy(subpath: string) {
 for (const sub of MCP_GET_SUBPATHS) {
   registerMcpGetProxy(sub);
 }
+
+/** POST /api/proxy/mcp/:shopId/purchase-orders — crear orden de compra (proveedor) */
+router.post('/mcp/:shopId/purchase-orders', async (req, res) => {
+  const { shopId } = req.params;
+  const targetUrl = `${BIZNEAI_ORIGIN}/api/mcp/${shopId}/purchase-orders`;
+  try {
+    const response = await axios.post(targetUrl, req.body, {
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      timeout: 15000,
+      validateStatus: () => true,
+    });
+    res.status(response.status).json(response.data);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Proxy error';
+    console.error('[Purchase Orders POST]', message);
+    res.status(502).json({ success: false, error: message });
+  }
+});
+
+/** POST /api/proxy/mcp/:shopId/purchase-orders/:orderId/receive — recibir ítems de una orden */
+router.post('/mcp/:shopId/purchase-orders/:orderId/receive', async (req, res) => {
+  const { shopId, orderId } = req.params;
+  const targetUrl = `${BIZNEAI_ORIGIN}/api/mcp/${shopId}/purchase-orders/${encodeURIComponent(orderId)}/receive`;
+  try {
+    const response = await axios.post(targetUrl, req.body, {
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      timeout: 15000,
+      validateStatus: () => true,
+    });
+    res.status(response.status).json(response.data);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Proxy error';
+    console.error('[Purchase Orders receive POST]', message);
+    res.status(502).json({ success: false, error: message });
+  }
+});
 
 /** POST /api/proxy/mcp/:shopId/customers — alta de cliente MCP */
 router.post('/mcp/:shopId/customers', async (req, res) => {
@@ -290,9 +327,36 @@ router.put('/mcp/:shopId/customers/:customerId', async (req, res) => {
   }
 });
 
-/** POST /api/proxy/discount-qr/verify - Proxy para verificar código QR de descuento */
-router.post('/discount-qr/verify', async (req, res) => {
-  const targetUrl = `${BIZNEAI_ORIGIN}/api/discount-qr/verify`;
+/**
+ * PUT /api/proxy/mcp/:shopId/products/:productId — actualización de producto MCP
+ * (usado hoy solo para marcar/editar datos de consignación: isConsignment,
+ * consignmentSupplier, consignmentUnitCost, consignmentNotes; el editor local
+ * de ProductManagement.tsx sigue siendo solo-local para el resto de campos).
+ */
+router.put('/mcp/:shopId/products/:productId', async (req, res) => {
+  const { shopId, productId } = req.params;
+  const targetUrl = `${BIZNEAI_ORIGIN}/api/mcp/${shopId}/products/${encodeURIComponent(productId)}`;
+  try {
+    const response = await axios.put(targetUrl, req.body, {
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      timeout: 15000,
+      validateStatus: () => true,
+    });
+    res.status(response.status).json(response.data);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Proxy error';
+    console.error('[MCP products PUT]', message);
+    res.status(502).json({ success: false, error: message });
+  }
+});
+
+/**
+ * POST /api/proxy/fx/validate-coupon - Proxy para validar cupón DameCodigo (sin canjear).
+ * El endpoint real es /api/fx/validate-coupon; /api/discount-qr/verify (nombre anterior
+ * de esta ruta) nunca existió en el backend — corregido aquí.
+ */
+router.post('/fx/validate-coupon', async (req, res) => {
+  const targetUrl = `${BIZNEAI_ORIGIN}/api/fx/validate-coupon`;
 
   try {
     const response = await axios.post(targetUrl, req.body, {
@@ -312,6 +376,88 @@ router.post('/discount-qr/verify', async (req, res) => {
       success: false,
       error: message,
     });
+  }
+});
+
+/**
+ * POST /api/proxy/fx/redeem-coupon - Proxy para canjear cupón DameCodigo.
+ * Debe llamarse una sola vez, después de que el pago de la venta fue aceptado.
+ */
+router.post('/fx/redeem-coupon', async (req, res) => {
+  const targetUrl = `${BIZNEAI_ORIGIN}/api/fx/redeem-coupon`;
+
+  try {
+    const response = await axios.post(targetUrl, req.body, {
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      timeout: 10000,
+      validateStatus: () => true,
+    });
+
+    res.status(response.status).json(response.data);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Proxy error';
+    console.error('[Discount QR Proxy] Error forwarding to', targetUrl, message);
+    res.status(502).json({
+      success: false,
+      error: message,
+    });
+  }
+});
+
+/** POST /api/proxy/mcp/:shopId/cash-register/open - Abrir sesión de caja */
+router.post('/mcp/:shopId/cash-register/open', async (req, res) => {
+  const { shopId } = req.params;
+  const targetUrl = `${BIZNEAI_ORIGIN}/api/mcp/${shopId}/cash-register/open`;
+  try {
+    const response = await axios.post(targetUrl, req.body, {
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      timeout: 15000,
+      validateStatus: () => true,
+    });
+    res.status(response.status).json(response.data);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Proxy error';
+    console.error('[Cash Register open POST]', message);
+    res.status(502).json({ success: false, error: message });
+  }
+});
+
+/** POST /api/proxy/mcp/:shopId/cash-register/close - Cerrar sesión de caja activa */
+router.post('/mcp/:shopId/cash-register/close', async (req, res) => {
+  const { shopId } = req.params;
+  const targetUrl = `${BIZNEAI_ORIGIN}/api/mcp/${shopId}/cash-register/close`;
+  try {
+    const response = await axios.post(targetUrl, req.body, {
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      timeout: 15000,
+      validateStatus: () => true,
+    });
+    res.status(response.status).json(response.data);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Proxy error';
+    console.error('[Cash Register close POST]', message);
+    res.status(502).json({ success: false, error: message });
+  }
+});
+
+/** POST /api/proxy/mcp/:shopId/cash-register/movements - Registrar movimiento de efectivo */
+router.post('/mcp/:shopId/cash-register/movements', async (req, res) => {
+  const { shopId } = req.params;
+  const targetUrl = `${BIZNEAI_ORIGIN}/api/mcp/${shopId}/cash-register/movements`;
+  try {
+    const response = await axios.post(targetUrl, req.body, {
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      timeout: 15000,
+      validateStatus: () => true,
+    });
+    res.status(response.status).json(response.data);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Proxy error';
+    console.error('[Cash Register movements POST]', message);
+    res.status(502).json({ success: false, error: message });
   }
 });
 

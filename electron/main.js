@@ -32,7 +32,7 @@ let dbConsoleWindow = null;
 
 function checkViteServer() {
   return new Promise((resolve) => {
-    const req = http.get('http://localhost:5173', (res) => {
+    const req = http.get('http://localhost:5174', (res) => {
       resolve(res.statusCode === 200);
     });
     req.on('error', () => {
@@ -78,7 +78,7 @@ function createDbConsoleWindow() {
       if (isDev) {
         const viteRunning = await checkViteServer();
         if (viteRunning) {
-          await w.loadURL('http://localhost:5173/#/db-console');
+          await w.loadURL('http://localhost:5174/#/db-console');
           return;
         }
       }
@@ -89,7 +89,7 @@ function createDbConsoleWindow() {
       await w.loadURL(
         'data:text/html;charset=utf-8,' +
           encodeURIComponent(
-            '<!DOCTYPE html><html><body style="font-family:sans-serif;padding:2rem"><p>No se encontró la UI (dist/). Ejecuta <code>npm run build</code> o inicia Vite en :5173.</p></body></html>'
+            '<!DOCTYPE html><html><body style="font-family:sans-serif;padding:2rem"><p>No se encontró la UI (dist/). Ejecuta <code>npm run build</code> o inicia Vite en :5174.</p></body></html>'
           )
       );
     } catch (e) {
@@ -196,12 +196,12 @@ function createWindow() {
 
   // Load the app - SIEMPRE carga el POS local (nunca bizneai.com)
   const loadApp = async () => {
-    const viteUrl = 'http://localhost:5173';
+    const viteUrl = 'http://localhost:5174';
     if (isDev) {
       const viteRunning = await checkViteServer();
       if (viteRunning) {
         mainWindow.loadURL(viteUrl);
-        console.log('✅ POS cargado desde Vite (localhost:5173)');
+        console.log('✅ POS cargado desde Vite (localhost:5174)');
         return;
       }
       console.log('⚠️ Vite no está corriendo. Usando dist/ o mostrando instrucciones...');
@@ -463,7 +463,7 @@ async function resolveThermalPrinterName(preferred, generic80mmFallback = false)
 
 function probeBackendHealthOnce() {
   return new Promise((resolve) => {
-    const req = http.get('http://127.0.0.1:3000/health', (res) => {
+    const req = http.get('http://127.0.0.1:3001/health', (res) => {
       resolve(res.statusCode === 200);
     });
     req.on('error', () => resolve(false));
@@ -510,14 +510,15 @@ function embeddedNodeBundledPath() {
   return path.join(__dirname, '..', 'embedded-node', binName);
 }
 
-/** Arranca el bundle Express+SQLite en :3000 (Node embebido o del PATH). */
+/** Arranca el bundle Express+SQLite en :3001 (Node embebido o del PATH). */
 async function ensureEmbeddedBackend() {
   const userData = app.getPath('userData');
   process.env.BIZNEAI_USER_DATA = userData;
   process.env.BIZNEAI_EMBEDDED = '1';
+  process.env.PORT = process.env.PORT || '3001';
 
   if (await probeBackendHealthOnce()) {
-    console.log('[Backend] API local ya activa en :3000');
+    console.log('[Backend] API local ya activa en :3001');
     return;
   }
 
@@ -537,6 +538,7 @@ async function ensureEmbeddedBackend() {
         ...process.env,
         BIZNEAI_USER_DATA: userData,
         BIZNEAI_EMBEDDED: '1',
+        PORT: process.env.PORT || '3001',
       },
       cwd: path.join(__dirname, '..'),
       stdio: 'inherit',
@@ -563,9 +565,9 @@ async function ensureEmbeddedBackend() {
   const ok = await waitForBackendReady(20000);
   if (ok) {
     const src = fs.existsSync(embeddedNodeBundledPath()) ? 'Node embebido' : 'Node del PATH';
-    console.log(`[Backend] SQLite + Express (${src}) en http://127.0.0.1:3000`);
+    console.log(`[Backend] SQLite + Express (${src}) en http://127.0.0.1:3001`);
   } else {
-    console.warn('[Backend] /health no respondió a tiempo (¿puerto 3000 ocupado o error en el bundle?)');
+    console.warn('[Backend] /health no respondió a tiempo (¿puerto 3001 ocupado o error en el bundle?)');
   }
 }
 
@@ -573,7 +575,7 @@ async function ensureEmbeddedBackend() {
 app.whenReady().then(async () => {
   await ensureEmbeddedBackend();
 
-  /** Para la consola BD: el renderer comprueba si :3000 responde (misma lógica que el arranque). */
+  /** Para la consola BD: el renderer comprueba si :3001 responde (misma lógica que el arranque). */
   ipcMain.handle('probe-local-api', async () => {
     const ok = await probeBackendHealthOnce();
     const bundlePath = path.join(__dirname, '../dist-backend/bizneai-server.cjs');

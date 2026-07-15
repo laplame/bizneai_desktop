@@ -80,4 +80,4 @@ console.log('  ', releaseDir, '(última compilación)');
 console.log('  ', versioned, '(copia fechada)');
 console.log('\nEn Windows, en la tienda: ejecutar iniciar-api-local.bat');
 console.log('(Node en PATH o carpeta node\\ con node.exe portable).');
-console.log('API: http://127.0.0.1:3000/health');
+console.log('API: http://127.0.0.1:3001/health');

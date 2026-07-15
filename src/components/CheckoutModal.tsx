@@ -10,7 +10,12 @@ import {
   Receipt,
   Link as LinkIcon,
   Wallet,
+  Loader2,
+  BadgeCheck,
+  XCircle,
 } from 'lucide-react';
+import { verifyDiscountQr, redeemDiscountQr, type DiscountQrCouponData } from '../api/discountQr';
+import { getShopId } from '../utils/shopIdHelper';
 
 export interface CheckoutDeferPaymentProps {
   show: boolean;
@@ -23,7 +28,8 @@ interface CheckoutModalProps {
   isOpen: boolean;
   onClose: () => void;
   total: number;
-  onComplete: (paymentMethod: string, amount: number, change?: number) => void;
+  /** cashPortion: monto realmente cobrado en efectivo (para registrar el movimiento de caja). */
+  onComplete: (paymentMethod: string, amount: number, change?: number, cashPortion?: number) => void;
   /** Diferir pago / historial de crédito cuando el carrito tiene cliente del registro. */
   deferPayment?: CheckoutDeferPaymentProps;
 }
@@ -110,6 +116,9 @@ const CheckoutModal = ({
   const [mixedCardExpiry, setMixedCardExpiry] = useState('');
   const [mixedCardCvv, setMixedCardCvv] = useState('');
   const [mixedCryptoCoupon, setMixedCryptoCoupon] = useState('');
+  const [couponStatus, setCouponStatus] = useState<'idle' | 'checking' | 'valid' | 'invalid'>('idle');
+  const [couponResult, setCouponResult] = useState<DiscountQrCouponData | null>(null);
+  const [couponError, setCouponError] = useState<string | null>(null);
 
   /** Total a cobrar (igual al resumen del carrito; el IVA ya está aplicado en el padre). */
   const finalTotal = total;
@@ -138,6 +147,9 @@ const CheckoutModal = ({
       setMixedCardExpiry('');
       setMixedCardCvv('');
       setMixedCryptoCoupon('');
+      setCouponStatus('idle');
+      setCouponResult(null);
+      setCouponError(null);
     }
     wasOpenRef.current = isOpen;
   }, [isOpen]);
@@ -147,22 +159,59 @@ const CheckoutModal = ({
     setStep('payment');
   };
 
+  /** Valida el cupón DameCodigo sin canjearlo (POST /api/fx/validate-coupon). */
+  const handleVerifyCoupon = async () => {
+    const code = mixedCryptoCoupon.trim();
+    if (!code) return;
+    const shopId = getShopId();
+    if (!shopId) {
+      setCouponStatus('invalid');
+      setCouponError('Configura el ID de tienda antes de usar cupones crypto.');
+      return;
+    }
+    setCouponStatus('checking');
+    setCouponError(null);
+    const res = await verifyDiscountQr(code, shopId, mixedCryptoTotal, 'MXN');
+    if (res.success && res.data?.valid) {
+      setCouponStatus('valid');
+      setCouponResult(res.data);
+    } else {
+      setCouponStatus('invalid');
+      setCouponResult(null);
+      setCouponError(res.data?.message || res.error || 'Cupón no válido');
+    }
+  };
+
   const handlePayment = async () => {
     setIsProcessing(true);
-    
+
     // Simular procesamiento de pago
     await new Promise(resolve => setTimeout(resolve, 2000));
-    
+
+    // Canje definitivo del cupón crypto (DameCodigo) — solo tras confirmar el pago.
+    // No bloqueante: si falla, la venta ya fue aceptada; se avisa por toast.
+    if (selectedMethod === 'mixed' && mixedCryptoPercent > 0 && couponStatus === 'valid') {
+      const shopId = getShopId();
+      const code = mixedCryptoCoupon.trim();
+      if (shopId && code) {
+        redeemDiscountQr(code, shopId, mixedCryptoTotal, 'MXN').then((res) => {
+          if (!res.success || !res.data?.valid) {
+            toast.error(`Cupón crypto no se pudo canjear: ${res.data?.message || res.error || 'error desconocido'}`);
+          }
+        });
+      }
+    }
+
     setIsProcessing(false);
     setStep('success');
-    
+
     // Simular cierre automático después de mostrar éxito
     setTimeout(() => {
       if (selectedMethod === 'mixed') {
         // Para pago mixto, pasar el total y los detalles
-        onComplete('mixed', finalTotal, 0);
+        onComplete('mixed', finalTotal, 0, mixedCashTotal);
       } else {
-        onComplete(selectedMethod!, finalTotal, change);
+        onComplete(selectedMethod!, finalTotal, change, selectedMethod === 'cash' ? finalTotal : 0);
       }
       onClose();
     }, 2000);
@@ -603,16 +652,76 @@ const CheckoutModal = ({
 
             {mixedCryptoPercent > 0 && (
               <div className="mixed-payment-detail">
-                <h4>Cupón Crypto: ${mixedCryptoTotal.toFixed(2)}</h4>
+                <h4>Cupón Crypto (DameCodigo): ${mixedCryptoTotal.toFixed(2)}</h4>
                 <div className="input-group">
                   <label>Código del cupón:</label>
-                  <input
-                    type="text"
-                    value={mixedCryptoCoupon}
-                    onChange={(e) => setMixedCryptoCoupon(e.target.value)}
-                    placeholder="Ingresa el código del cupón"
-                  />
+                  <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    <input
+                      type="text"
+                      value={mixedCryptoCoupon}
+                      onChange={(e) => {
+                        setMixedCryptoCoupon(e.target.value);
+                        setCouponStatus('idle');
+                        setCouponResult(null);
+                        setCouponError(null);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          void handleVerifyCoupon();
+                        }
+                      }}
+                      placeholder="Escanea o pega el código del cupón"
+                      style={{ flex: 1 }}
+                    />
+                    <button
+                      type="button"
+                      className="payment-btn"
+                      style={{ width: 'auto', padding: '0 1rem', margin: 0 }}
+                      disabled={!mixedCryptoCoupon.trim() || couponStatus === 'checking'}
+                      onClick={() => void handleVerifyCoupon()}
+                    >
+                      {couponStatus === 'checking' ? (
+                        <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} />
+                      ) : (
+                        'Verificar'
+                      )}
+                    </button>
+                  </div>
                 </div>
+                {couponStatus === 'valid' && couponResult && (
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.5rem',
+                      color: '#059669',
+                      fontSize: '0.875rem',
+                      marginTop: '0.5rem',
+                    }}
+                  >
+                    <BadgeCheck size={18} />
+                    <span>
+                      {couponResult.promotionTitle || 'Cupón válido'} · descuento $
+                      {couponResult.discountAmount.toFixed(2)} {couponResult.currency}
+                    </span>
+                  </div>
+                )}
+                {couponStatus === 'invalid' && (
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.5rem',
+                      color: '#dc2626',
+                      fontSize: '0.875rem',
+                      marginTop: '0.5rem',
+                    }}
+                  >
+                    <XCircle size={18} />
+                    <span>{couponError}</span>
+                  </div>
+                )}
               </div>
             )}
 
@@ -623,7 +732,7 @@ const CheckoutModal = ({
                 mixedTotalPercent !== 100 ||
                 (mixedCashPercent > 0 && parseFloat(mixedCashAmount) < mixedCashTotal) ||
                 (mixedCardPercent > 0 && (!mixedCardNumber || !mixedCardExpiry || !mixedCardCvv)) ||
-                (mixedCryptoPercent > 0 && !mixedCryptoCoupon) ||
+                (mixedCryptoPercent > 0 && couponStatus !== 'valid') ||
                 isProcessing
               }
               style={{ 

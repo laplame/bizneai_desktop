@@ -39,6 +39,13 @@ export function buildShopWaitlistPostPayload(body: CreateWaitlistEntryRequest): 
       ...(ci.email != null && String(ci.email).trim() ? { email: String(ci.email).trim() } : {}),
     };
   }
+  if (body.tableNumber != null && String(body.tableNumber).trim()) {
+    payload.tableNumber = String(body.tableNumber).trim();
+  }
+  if (body.waiterName?.trim()) payload.waiterName = body.waiterName.trim();
+  if (body.waiterId != null && String(body.waiterId).trim()) {
+    payload.waiterId = String(body.waiterId).trim();
+  }
 
   return payload;
 }

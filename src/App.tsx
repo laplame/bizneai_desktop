@@ -29,7 +29,11 @@ import {
   ChevronUp,
   User,
   Printer,
-  Lock
+  Lock,
+  Wallet,
+  Landmark,
+  Truck,
+  HandCoins
 } from 'lucide-react';
 import { toast, Toaster } from 'react-hot-toast';
 import {
@@ -50,6 +54,8 @@ import {
   enqueuePendingSale,
   installPendingSalesSyncListeners,
 } from './services/pendingSalesSync';
+import { installOfflineWriteQueueListeners } from './services/offlineWriteQueue';
+import { registerAllOfflineExecutors } from './services/offlineExecutors';
 import { computeCartTaxBreakdownFromCartItems, loadTaxSettings } from './utils/taxSettings';
 import {
   loadCustomers,
@@ -78,6 +84,10 @@ import Settings from './components/Settings';
 import ProductUpload from './components/ProductUpload';
 import Waitlist from './components/Waitlist';
 import Taxes from './components/Taxes';
+import Cashier from './components/Cashier';
+import FinancialReports from './components/FinancialReports';
+import PurchaseOrders from './components/PurchaseOrders';
+import ConsignmentReport from './components/ConsignmentReport';
 import Kitchen from './components/Kitchen';
 import BizneAIChat from './components/BizneAIChat';
 import ComingSoon from './components/ComingSoon';
@@ -104,6 +114,7 @@ import {
 } from './services/rolesScreenLock';
 import { isConfigurationAccessUnlocked } from './services/configPasswords';
 import { recordSaleCashier } from './services/localActivityLog';
+import { addCashMovement } from './api/cashRegister';
 import {
   hydrateLocalFromServerIfEmpty,
   initPosPersistence,
@@ -164,7 +175,7 @@ function App() {
   const [isBarcodeScannerOpen, setIsBarcodeScannerOpen] = useState(false);
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
   const [productForVariantModal, setProductForVariantModal] = useState<Product | null>(null);
-  const [productManagementInitialView, setProductManagementInitialView] = useState<'list' | 'grid' | 'analytics' | 'inventory' | null>(null);
+  const [productManagementInitialView, setProductManagementInitialView] = useState<'list' | 'grid' | 'analytics' | 'inventory' | 'components' | null>(null);
   const [productManagementRestockProduct, setProductManagementRestockProduct] = useState<{
     id: number | string;
     name: string;
@@ -175,11 +186,15 @@ function App() {
   const [isVirtualTicketOpen, setIsVirtualTicketOpen] = useState(false);
   const [isWaitlistOpen, setIsWaitlistOpen] = useState(false);
   const [isTaxesOpen, setIsTaxesOpen] = useState(false);
+  const [isCashierOpen, setIsCashierOpen] = useState(false);
+  const [isFinancialReportsOpen, setIsFinancialReportsOpen] = useState(false);
+  const [isPurchaseOrdersOpen, setIsPurchaseOrdersOpen] = useState(false);
+  const [isConsignmentReportOpen, setIsConsignmentReportOpen] = useState(false);
   const [isKitchenOpen, setIsKitchenOpen] = useState(false);
   const [isComingSoonOpen, setIsComingSoonOpen] = useState(false);
   const [printErrorModal, setPrintErrorModal] = useState<{ message: string } | null>(null);
   const [isPrintingCatalog, setIsPrintingCatalog] = useState(false);
-  const [activeSection, setActiveSection] = useState<'pos' | 'cart' | 'products' | 'reports' | 'customers' | 'waitlist' | 'taxes' | 'kitchen' | 'chat' | 'coming-soon' | 'settings'>('pos');
+  const [activeSection, setActiveSection] = useState<'pos' | 'cart' | 'products' | 'reports' | 'customers' | 'waitlist' | 'taxes' | 'cashier' | 'financial-reports' | 'purchase-orders' | 'consignment' | 'kitchen' | 'chat' | 'coming-soon' | 'settings'>('pos');
   const [customerInfo, setCustomerInfo] = useState<CustomerInfo>({});
   const [orderNotes, setOrderNotes] = useState<string>('');
   const [customerInfoCollapsed, setCustomerInfoCollapsed] = useState(true);
@@ -405,6 +420,22 @@ function App() {
     };
     window.addEventListener('pending-sales-sync-toast', onPendingSalesToast);
     return () => window.removeEventListener('pending-sales-sync-toast', onPendingSalesToast);
+  }, []);
+
+  // Cola genérica de escrituras offline (Purchase Orders, Consignación, Caja)
+  // → reenvío al volver online + periódicamente.
+  useEffect(() => {
+    registerAllOfflineExecutors();
+    installOfflineWriteQueueListeners();
+    const onOfflineQueueSynced = (e: Event) => {
+      const ce = e as CustomEvent<{ count?: number }>;
+      const n = typeof ce.detail?.count === 'number' ? ce.detail.count : 0;
+      if (n > 0) {
+        toast.success(`${n} registro(s) pendiente(s) sincronizado(s) con el servidor.`);
+      }
+    };
+    window.addEventListener('offline-write-queue-synced', onOfflineQueueSynced);
+    return () => window.removeEventListener('offline-write-queue-synced', onOfflineQueueSynced);
   }, []);
 
   // Cargar contadores de pedidos al iniciar
@@ -634,6 +665,23 @@ function App() {
     return () => window.removeEventListener('bizneai-force-screen-lock', onForceLock);
   }, []);
 
+  // Filtrar y ordenar productos — DEBE ir antes de cualquier return temprano
+  // (si no, al completar setup aparece un useMemo de más → pantalla negra).
+  const filteredProducts = useMemo(() => {
+    const search = searchTerm.toLowerCase();
+    const category = selectedCategory.toLowerCase();
+    return products
+      .filter(product => {
+        const matchesCategory = selectedCategory === 'Todos' ||
+                              product.category === selectedCategory ||
+                              (product.category && product.category.toLowerCase() === category);
+        const matchesSearch = product.name.toLowerCase().includes(search) ||
+                             (product.barcode && product.barcode.includes(searchTerm));
+        return matchesCategory && matchesSearch;
+      })
+      .sort((a, b) => (productOrderCounts[b.id] || 0) - (productOrderCounts[a.id] || 0));
+  }, [products, selectedCategory, searchTerm, productOrderCounts]);
+
   // Si la configuración no está completa, mostrar la pantalla de configuración
   if (!isSetupComplete) {
     return (
@@ -654,24 +702,6 @@ function App() {
       </div>
     );
   }
-
-  // Filtrar y ordenar productos por categoría/búsqueda/popularidad.
-  // Memoizado: antes se recalculaba en cada render (p. ej. al tocar el carrito).
-  const filteredProducts = useMemo(() => {
-    const search = searchTerm.toLowerCase();
-    const category = selectedCategory.toLowerCase();
-    return products
-      .filter(product => {
-        const matchesCategory = selectedCategory === 'Todos' ||
-                              product.category === selectedCategory ||
-                              (product.category && product.category.toLowerCase() === category);
-        const matchesSearch = product.name.toLowerCase().includes(search) ||
-                             (product.barcode && product.barcode.includes(searchTerm));
-        return matchesCategory && matchesSearch;
-      })
-      // Ordenar por cantidad de pedidos (más pedidos primero)
-      .sort((a, b) => (productOrderCounts[b.id] || 0) - (productOrderCounts[a.id] || 0));
-  }, [products, selectedCategory, searchTerm, productOrderCounts]);
 
   // Crear item del carrito — delega en la función pura createCartLine (utils/cartOperations).
   const createCartItem = (
@@ -983,6 +1013,8 @@ function App() {
                   email: customerInfo.email,
                 }
               : { name: customerName },
+          tableNumber: customerInfo?.tableNumber || undefined,
+          waiterName: customerInfo?.waiterName || undefined,
         });
         if (serverRes.success && serverRes.data && typeof serverRes.data === 'object') {
           const d = serverRes.data as unknown as { _id?: string; [k: string]: unknown };
@@ -1036,7 +1068,7 @@ function App() {
   };
 
   // Manejar completar checkout (crea venta en API según Sales Sync Model)
-  const handleCheckoutComplete = async (paymentMethod: string, amount: number, change?: number) => {
+  const handleCheckoutComplete = async (paymentMethod: string, amount: number, change?: number, cashPortion?: number) => {
     const saleId = nextSaleTicketId();
     const wlEntryId = pendingWaitlistEntryIdRef.current;
     const isCredit = String(paymentMethod).toLowerCase() === 'credit';
@@ -1190,6 +1222,26 @@ function App() {
       itemsSummary: apiPayload.items.map((i) => `${i.productName} x${i.quantity}`).join(', '),
       identity: getScreenLockIdentity(),
     });
+
+    // Movimiento de caja: solo la porción realmente cobrada en efectivo (cash puro o
+    // la rebanada de efectivo de un pago mixto). No bloqueante: si no hay sesión de
+    // caja abierta, el backend rechaza el movimiento y solo se registra en consola —
+    // la venta ya quedó completada.
+    if (cashPortion && cashPortion > 0) {
+      const shopForCashRegister = getShopId();
+      if (shopForCashRegister) {
+        addCashMovement(shopForCashRegister, {
+          type: 'saleCash',
+          amount: cashPortion,
+          referenceId: remoteTransactionId,
+          notes: `Venta #${saleId}`,
+        }).then((res) => {
+          if (!res.success) {
+            console.warn('[SALE] Movimiento de caja no registrado:', res.error);
+          }
+        });
+      }
+    }
 
     if (wlEntryId) {
       const shopForWaitlistSync = (() => {
@@ -1379,7 +1431,7 @@ function App() {
     setIsProductManagementOpen(true);
   };
 
-  const handleSectionChange = (section: 'pos' | 'cart' | 'products' | 'reports' | 'customers' | 'waitlist' | 'taxes' | 'kitchen' | 'chat' | 'coming-soon' | 'settings') => {
+  const handleSectionChange = (section: 'pos' | 'cart' | 'products' | 'reports' | 'customers' | 'waitlist' | 'taxes' | 'cashier' | 'financial-reports' | 'purchase-orders' | 'consignment' | 'kitchen' | 'chat' | 'coming-soon' | 'settings') => {
     if (section === 'kitchen' && !getKitchenModuleVisibility()) {
       return;
     }
@@ -1402,6 +1454,14 @@ function App() {
       setIsWaitlistOpen(true);
     } else if (section === 'taxes') {
       setIsTaxesOpen(true);
+    } else if (section === 'cashier') {
+      setIsCashierOpen(true);
+    } else if (section === 'financial-reports') {
+      setIsFinancialReportsOpen(true);
+    } else if (section === 'purchase-orders') {
+      setIsPurchaseOrdersOpen(true);
+    } else if (section === 'consignment') {
+      setIsConsignmentReportOpen(true);
     } else if (section === 'kitchen') {
       // Kitchen se renderiza directamente en el contenido, no como modal
       // Solo actualizar activeSection
@@ -1784,15 +1844,63 @@ function App() {
             </div>
           </div>
 
-          {/* Impuestos */}
+          {/* Facturación */}
           <div className={`sidebar-section ${sidebarMinimal ? 'sidebar-section-minimal' : ''}`}>
             <div
               className={`sidebar-item ${sidebarMinimal ? 'sidebar-item-icon-only' : ''} ${activeSection === 'taxes' ? 'active' : ''}`}
               onClick={() => handleSectionChange('taxes')}
-              title="Impuestos"
+              title="Facturación"
             >
               <ReceiptText size={sidebarMinimal ? 22 : 20} />
-              {!sidebarMinimal && 'Impuestos'}
+              {!sidebarMinimal && 'Facturación'}
+            </div>
+          </div>
+
+          {/* Caja */}
+          <div className={`sidebar-section ${sidebarMinimal ? 'sidebar-section-minimal' : ''}`}>
+            <div
+              className={`sidebar-item ${sidebarMinimal ? 'sidebar-item-icon-only' : ''} ${activeSection === 'cashier' ? 'active' : ''}`}
+              onClick={() => handleSectionChange('cashier')}
+              title="Caja"
+            >
+              <Wallet size={sidebarMinimal ? 22 : 20} />
+              {!sidebarMinimal && 'Caja'}
+            </div>
+          </div>
+
+          {/* Reportes Financieros */}
+          <div className={`sidebar-section ${sidebarMinimal ? 'sidebar-section-minimal' : ''}`}>
+            <div
+              className={`sidebar-item ${sidebarMinimal ? 'sidebar-item-icon-only' : ''} ${activeSection === 'financial-reports' ? 'active' : ''}`}
+              onClick={() => handleSectionChange('financial-reports')}
+              title="Reportes Financieros"
+            >
+              <Landmark size={sidebarMinimal ? 22 : 20} />
+              {!sidebarMinimal && 'Finanzas'}
+            </div>
+          </div>
+
+          {/* Proveedores / Órdenes de compra */}
+          <div className={`sidebar-section ${sidebarMinimal ? 'sidebar-section-minimal' : ''}`}>
+            <div
+              className={`sidebar-item ${sidebarMinimal ? 'sidebar-item-icon-only' : ''} ${activeSection === 'purchase-orders' ? 'active' : ''}`}
+              onClick={() => handleSectionChange('purchase-orders')}
+              title="Proveedores"
+            >
+              <Truck size={sidebarMinimal ? 22 : 20} />
+              {!sidebarMinimal && 'Proveedores'}
+            </div>
+          </div>
+
+          {/* Consignación */}
+          <div className={`sidebar-section ${sidebarMinimal ? 'sidebar-section-minimal' : ''}`}>
+            <div
+              className={`sidebar-item ${sidebarMinimal ? 'sidebar-item-icon-only' : ''} ${activeSection === 'consignment' ? 'active' : ''}`}
+              onClick={() => handleSectionChange('consignment')}
+              title="Consignación"
+            >
+              <HandCoins size={sidebarMinimal ? 22 : 20} />
+              {!sidebarMinimal && 'Consignación'}
             </div>
           </div>
 
@@ -2506,6 +2614,50 @@ function App() {
             isOpen={isTaxesOpen}
             onClose={() => {
               setIsTaxesOpen(false);
+              setActiveSection('pos');
+            }}
+          />
+        )}
+
+        {/* Cashier Modal */}
+        {isCashierOpen && (
+          <Cashier
+            isOpen={isCashierOpen}
+            onClose={() => {
+              setIsCashierOpen(false);
+              setActiveSection('pos');
+            }}
+          />
+        )}
+
+        {/* Financial Reports Modal */}
+        {isFinancialReportsOpen && (
+          <FinancialReports
+            isOpen={isFinancialReportsOpen}
+            onClose={() => {
+              setIsFinancialReportsOpen(false);
+              setActiveSection('pos');
+            }}
+          />
+        )}
+
+        {/* Purchase Orders Modal */}
+        {isPurchaseOrdersOpen && (
+          <PurchaseOrders
+            isOpen={isPurchaseOrdersOpen}
+            onClose={() => {
+              setIsPurchaseOrdersOpen(false);
+              setActiveSection('pos');
+            }}
+          />
+        )}
+
+        {/* Consignment Report Modal */}
+        {isConsignmentReportOpen && (
+          <ConsignmentReport
+            isOpen={isConsignmentReportOpen}
+            onClose={() => {
+              setIsConsignmentReportOpen(false);
               setActiveSection('pos');
             }}
           />

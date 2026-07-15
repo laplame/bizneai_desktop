@@ -46,6 +46,7 @@ import {
   mergeSaleRows,
   saleRowToRecoveryPayload,
 } from '../utils/salesRecovery';
+import SalesOlapReportPanel from './SalesOlapReportPanel';
 import type { RecoveredSalePayload } from '../types/salesRecovery';
 import { printReceiptThermalOrDialog, resolveStoreNameForPrint } from '../services/receiptPrintService';
 import { computeCartTaxBreakdownFromCartItems, loadTaxSettings } from '../utils/taxSettings';
@@ -146,7 +147,7 @@ const SalesReports = ({ isOpen, onClose, onRecoverSaleToCart }: SalesReportsProp
   const [paymentMethod, setPaymentMethod] = useState('all');
   const [category, setCategory] = useState('all');
   const [view, setView] = useState<
-    'summary' | 'detailed' | 'analytics' | 'history' | 'stats' | 'customers' | 'activity'
+    'summary' | 'detailed' | 'analytics' | 'history' | 'stats' | 'customers' | 'activity' | 'olap'
   >('summary');
   const [sessionEvents, setSessionEvents] = useState<LocalSessionEvent[]>([]);
   const [saleCashierEvents, setSaleCashierEvents] = useState<LocalSaleCashierEvent[]>([]);
@@ -1476,6 +1477,13 @@ const SalesReports = ({ isOpen, onClose, onRecoverSaleToCart }: SalesReportsProp
               <Activity size={20} />
               Stats
             </button>
+            <button
+              className={`view-tab ${view === 'olap' ? 'active' : ''}`}
+              onClick={() => setView('olap')}
+            >
+              <BarChart3 size={20} />
+              OLAP
+            </button>
             <button 
               className={`view-tab ${view === 'detailed' ? 'active' : ''}`}
               onClick={() => setView('detailed')}
@@ -1517,6 +1525,7 @@ const SalesReports = ({ isOpen, onClose, onRecoverSaleToCart }: SalesReportsProp
           <div className="view-content">
             {view === 'summary' && renderSummary()}
             {view === 'stats' && renderStats()}
+            {view === 'olap' && <SalesOlapReportPanel dateRange={dateRange} />}
             {view === 'detailed' && renderDetailed()}
             {view === 'analytics' && renderAnalytics()}
             {view === 'history' && renderHistory()}

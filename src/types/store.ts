@@ -11,6 +11,8 @@ export interface StoreConfig {
   kitchenEnabled: boolean;
   crypto: boolean;
   acceptedCryptocurrencies: string[];
+  /** Direcciones por moneda, p. ej. { luxae: '0x...', bitcoin: '...' }. */
+  cryptoAddresses?: Record<string, string>;
   /** Porcentaje de IVA/impuesto (ej. 16) */
   taxRate?: number;
   taxCalculationMethod?: 'exclusive' | 'inclusive';

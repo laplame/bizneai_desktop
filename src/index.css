@@ -500,6 +500,7 @@ html, body {
 /* Products */
 .pos-products {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: 1rem;
   display: flex;
@@ -1351,15 +1352,19 @@ html, body {
 /* POS Product Grid - tarjetas más grandes para terminales táctiles */
 .product-grid {
   display: grid;
-  /* Responsive: tarjetas ~150px que se reflujan según el ancho disponible.
-     El 220px anterior dejaba pocas columnas anchas (aspecto de "banner").
-     min(150px, 100%) evita desbordes horizontales en ventanas muy angostas. */
+  /* Responsive: tarjetas ~170px. Con 3 columnas el ancho de celda es claro
+     y la altura la define el aspect-ratio del bloque de imagen (ver abajo). */
   grid-template-columns: repeat(auto-fill, minmax(min(170px, 100%), 1fr));
+  grid-auto-rows: max-content;
   gap: 0.85rem;
-  padding: 1rem;
-  flex: 1;
-  overflow-y: auto;
+  padding: 0.25rem 0 1rem;
+  /* El scroll lo hace .pos-products; el grid crece con el contenido
+     (flex:1 + overflow aquí aplastaba las filas en tiles con imagen). */
+  flex: 0 0 auto;
+  width: 100%;
   align-content: start;
+  align-items: stretch;
+  box-sizing: border-box;
 }
 
 /* POS Product Cards - Apply to all product cards in main content */
@@ -1375,18 +1380,20 @@ html, body {
   transition: all 0.15s ease;
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: stretch;
   text-align: center;
   position: relative;
   z-index: 2;
   box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
-  min-height: 0;
   justify-content: flex-start;
   gap: 0.35rem;
   overflow: hidden;
   box-sizing: border-box;
   width: 100%;
   max-width: 100%;
+  height: auto;
+  min-height: auto;
+  align-self: stretch;
   touch-action: manipulation;
   -webkit-tap-highlight-color: rgba(5, 150, 105, 0.2);
   user-select: none;
@@ -1409,7 +1416,8 @@ html, body {
   box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.08);
 }
 
-.product-grid .product-image {
+/* Sin imagen: thumbnail fijo 64px centrado */
+.product-grid .product-card:not(.product-card--has-image) .product-image {
   width: 64px !important;
   height: 64px !important;
   min-width: 64px !important;
@@ -1421,7 +1429,7 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-bottom: 0;
+  margin: 0 auto;
   font-size: 1.5rem;
   color: #6b7280;
   flex-shrink: 0;
@@ -1430,26 +1438,43 @@ html, body {
   box-sizing: border-box;
 }
 
-/* Tarjetas con imagen: la imagen ocupa toda la tarjeta (tile cuadrado) y los
-   datos (nombre + precio) van superpuestos dentro, abajo. */
+/*
+ * Con imagen: mismo patrón que .kioskv-card-img (funciona).
+ * El aspect-ratio va en .product-image (en flujo), NO en la card ni con
+ * height:100% absoluto — eso colapsaba las filas a franjas apiladas.
+ */
 .product-grid .product-card--has-image {
-  min-height: 0;
   padding: 0 !important;
-  aspect-ratio: 1 / 1;
-  overflow: hidden;
+  gap: 0;
+  height: auto !important;
+  min-height: 0;
 }
 
 .product-grid .product-card--has-image .product-image {
+  position: relative !important;
   width: 100% !important;
-  min-width: 100% !important;
-  max-width: 100% !important;
-  height: 100% !important;
-  aspect-ratio: auto !important;
-  min-height: 0 !important;
+  max-width: none !important;
+  min-width: 0 !important;
+  height: auto !important;
   max-height: none !important;
-  margin-bottom: 0;
-  flex-shrink: 0;
+  min-height: 0 !important;
+  aspect-ratio: 1 / 1 !important;
+  margin: 0 !important;
   border-radius: 12px;
+  background: #f3f4f6;
+  display: block !important;
+  overflow: hidden;
+  flex-shrink: 0;
+  box-sizing: border-box;
+}
+
+.product-grid .product-card--has-image .product-image img {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: cover !important;
+  display: block !important;
 }
 
 /* "+" de agregar: arriba a la derecha en tarjetas con imagen (el info va abajo) */
@@ -2177,7 +2202,13 @@ html, body {
   font-weight: 600;
 }
 
-.close-btn {
+/*
+ * Scope explícito: ".close-btn" se redefine dos veces más abajo con colores
+ * grises pensados para otros headers. Sin ".barcode-scanner-header" delante,
+ * esas reglas posteriores ganan la cascada y bajan el contraste del botón X
+ * sobre el header oscuro (#0f172a) del escáner de código de barras.
+ */
+.barcode-scanner-header .close-btn {
   background: none;
   border: none;
   color: white;
@@ -2187,7 +2218,7 @@ html, body {
   transition: background-color 0.2s ease;
 }
 
-.close-btn:hover {
+.barcode-scanner-header .close-btn:hover {
   background: rgba(255, 255, 255, 0.1);
 }
 
@@ -3215,13 +3246,20 @@ html, body {
   font-weight: 600;
 }
 
-.empty-state {
+/*
+ * Scope explícito: ".empty-state" se redefine más abajo (línea ~5693) con
+ * color: var(--bs-dark-text) (casi blanco) para modales de fondo oscuro. Sin
+ * ".reports-modal" delante esa regla posterior gana la cascada y deja el
+ * mensaje de "sin datos" casi invisible sobre el fondo blanco de
+ * SalesReports.tsx (.reports-modal) — mismo bug que .product-name.
+ */
+.reports-modal .empty-state {
   padding: 2rem;
   text-align: center;
   color: #475569;
 }
 
-.empty-state p {
+.reports-modal .empty-state p {
   margin: 0;
 }
 
@@ -4076,6 +4114,141 @@ html, body {
   overflow-y: auto;
 }
 
+.components-view {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.components-view-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.components-stat {
+  background: var(--bs-dark-surface-elevated, #1e293b);
+  border: 1px solid var(--bs-dark-border);
+  border-radius: var(--bs-radius-md, 8px);
+  padding: 0.85rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.components-stat strong {
+  font-size: 1.35rem;
+  color: var(--bs-dark-text, #f8fafc);
+}
+
+.components-stat span {
+  font-size: 0.8rem;
+  color: var(--bs-dark-text-muted, #94a3b8);
+}
+
+.components-view-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 2.5rem 1.5rem;
+  text-align: center;
+  color: var(--bs-dark-text-muted, #94a3b8);
+  border: 1px dashed var(--bs-dark-border);
+  border-radius: var(--bs-radius-md, 8px);
+}
+
+.components-view-empty-hint {
+  margin: 0;
+  max-width: 28rem;
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.components-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 0.85rem;
+}
+
+.components-card {
+  text-align: left;
+  cursor: pointer;
+  border: 1px solid var(--bs-dark-border);
+  border-radius: var(--bs-radius-md, 8px);
+  background: var(--bs-dark-surface-elevated, #1e293b);
+  color: inherit;
+  padding: 0.9rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.components-card:hover {
+  border-color: #3b82f6;
+}
+
+.components-card.is-selected {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.45);
+}
+
+.components-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.components-card-title-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.components-card-name {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--bs-dark-text, #f8fafc);
+}
+
+.components-card-count {
+  flex-shrink: 0;
+  font-size: 0.75rem;
+  color: #93c5fd;
+  background: rgba(59, 130, 246, 0.15);
+  border-radius: 999px;
+  padding: 0.2rem 0.55rem;
+}
+
+.components-card-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.components-card-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.82rem;
+  padding: 0.4rem 0.55rem;
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.4);
+}
+
+@media (max-width: 720px) {
+  .components-view-summary {
+    grid-template-columns: 1fr;
+  }
+}
+
 .product-components-aside-header {
   display: flex;
   align-items: center;
@@ -4416,7 +4589,16 @@ html, body {
   display: block;
 }
 
-.product-name {
+/*
+ * Nombre con scope explícito: ".product-name"/".stock-unit"/".stock-info" se
+ * redefinen más abajo (línea ~5136) para el contexto oscuro de
+ * InventoryManagement.tsx (.product-cell). Sin ".products-table"/".product-card"
+ * delante, esas reglas posteriores ganan la cascada por orden y dejan el texto
+ * de esta tabla/tarjetas casi invisible (gris claro sobre fondo blanco) — bug
+ * real visto en capturas de "Gestión de Productos" (vistas Lista y Cuadrícula).
+ */
+.products-table .product-name,
+.product-card .product-name {
   font-weight: 600;
   color: #1e293b;
   margin-bottom: 0.25rem;
@@ -4437,7 +4619,7 @@ html, body {
   font-weight: 500;
 }
 
-.stock-info {
+.products-table .stock-info {
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -4448,7 +4630,7 @@ html, body {
   color: #1e293b;
 }
 
-.stock-unit {
+.products-table .stock-unit {
   color: #64748b;
   font-size: 0.875rem;
 }
@@ -4518,6 +4700,17 @@ html, body {
 .action-buttons .action-btn:hover {
   background: #f1f5f9;
   color: #3b82f6;
+}
+
+/* Producto marcado como consignación (botón de camión activo) */
+.action-buttons .action-btn.is-active {
+  color: #b45309;
+  background: #fef3c7;
+}
+
+.action-buttons .action-btn.is-active:hover {
+  background: #fde68a;
+  color: #92400e;
 }
 
 /* Products Grid - Product Management */
@@ -6676,7 +6869,15 @@ html, body {
   gap: 0.25rem;
 }
 
-.item-name {
+/*
+ * Scope explícito: ".item-name" se redefine más abajo (línea ~10555) con
+ * color: var(--bs-dark-text) (casi blanco), pensada para otro contexto oscuro.
+ * Sin ".virtual-ticket-modal"/".ticket-viewer-content" delante, esa regla
+ * posterior gana la cascada y deja el nombre del producto casi invisible en
+ * el ticket de venta (fondo blanco) — mismo bug que .product-name.
+ */
+.virtual-ticket-modal .item-name,
+.ticket-viewer-content .item-name {
   font-weight: 600;
   color: #1e293b;
   font-size: 0.875rem;
@@ -7240,7 +7441,15 @@ html, body {
   gap: 0.25rem;
 }
 
-.item-name {
+/*
+ * Scope explícito: ".item-name" se redefine más abajo (línea ~10555) con
+ * color: var(--bs-dark-text) (casi blanco), pensada para otro contexto oscuro.
+ * Sin ".virtual-ticket-modal"/".ticket-viewer-content" delante, esa regla
+ * posterior gana la cascada y deja el nombre del producto casi invisible en
+ * el ticket de venta (fondo blanco) — mismo bug que .product-name.
+ */
+.virtual-ticket-modal .item-name,
+.ticket-viewer-content .item-name {
   font-weight: 600;
   color: #1e293b;
   font-size: 0.875rem;
@@ -10372,6 +10581,264 @@ html, body {
   margin-bottom: 1.5rem;
 }
 
+/* —— Kitchen Stats (OLAP) —— */
+.kitchen-stats-panel {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 1rem 1.25rem 2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.kitchen-stats-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.kitchen-stats-toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.kitchen-stats-title {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.kitchen-stats-title h2 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.kitchen-stats-title p {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--bs-dark-text-muted, #9ca3af);
+}
+
+.kitchen-stats-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1rem;
+  align-items: flex-end;
+  padding: 0.75rem 1rem;
+  background: var(--bs-dark-surface-elevated, #1f2937);
+  border: 1px solid var(--bs-dark-border, #374151);
+  border-radius: 10px;
+}
+
+.kitchen-stats-filters label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+  color: var(--bs-dark-text-muted, #9ca3af);
+}
+
+.kitchen-stats-filters input,
+.kitchen-stats-filters select {
+  background: var(--bs-dark-surface, #111827);
+  border: 1px solid var(--bs-dark-border, #374151);
+  color: inherit;
+  border-radius: 8px;
+  padding: 0.4rem 0.55rem;
+  font-size: 0.9rem;
+}
+
+.kitchen-stats-filter-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.75rem;
+  color: var(--bs-dark-text-muted, #9ca3af);
+  margin-left: auto;
+}
+
+.kitchen-stats-error {
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  color: #fca5a5;
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+}
+
+.kitchen-stats-warn {
+  background: rgba(234, 179, 8, 0.12);
+  border: 1px solid rgba(234, 179, 8, 0.35);
+  color: #fde68a;
+  padding: 0.6rem 1rem;
+  border-radius: 8px;
+  font-size: 0.85rem;
+}
+
+.kitchen-stats-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 3rem;
+  color: var(--bs-dark-text-muted, #9ca3af);
+}
+
+.kitchen-stats-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0.75rem;
+}
+
+.kitchen-stats-kpi {
+  background: var(--bs-dark-surface-elevated, #1f2937);
+  border: 1px solid var(--bs-dark-border, #374151);
+  border-radius: 10px;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.kitchen-stats-kpi .kpi-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.8rem;
+  color: var(--bs-dark-text-muted, #9ca3af);
+}
+
+.kitchen-stats-kpi strong {
+  font-size: 1.6rem;
+  font-weight: 700;
+}
+
+.kitchen-stats-kpi small {
+  font-size: 0.8rem;
+  color: var(--bs-dark-text-muted, #9ca3af);
+}
+
+.kitchen-stats-kpi.tone-good strong { color: #4ade80; }
+.kitchen-stats-kpi.tone-mid strong { color: #facc15; }
+.kitchen-stats-kpi.tone-bad strong { color: #f87171; }
+
+.kitchen-stats-section {
+  background: var(--bs-dark-surface-elevated, #1f2937);
+  border: 1px solid var(--bs-dark-border, #374151);
+  border-radius: 10px;
+  padding: 1rem 1.1rem 1.25rem;
+}
+
+.kitchen-stats-section h3 {
+  margin: 0 0 0.85rem;
+  font-size: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.kitchen-stats-empty {
+  margin: 0;
+  padding: 1.5rem 0.5rem;
+  text-align: center;
+  color: var(--bs-dark-text-muted, #9ca3af);
+  font-size: 0.9rem;
+}
+
+.kitchen-stats-bars {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.kitchen-stats-bars li {
+  display: grid;
+  grid-template-columns: 7.5rem 1fr minmax(9rem, auto);
+  gap: 0.6rem;
+  align-items: center;
+  font-size: 0.85rem;
+}
+
+.kitchen-stats-bars .bar-label {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: #d1d5db;
+}
+
+.kitchen-stats-bars .bar-track {
+  height: 8px;
+  background: #374151;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.kitchen-stats-bars .bar-fill {
+  height: 100%;
+  background: #3b82f6;
+  border-radius: 999px;
+}
+
+.kitchen-stats-bars .bar-meta {
+  text-align: right;
+  color: #9ca3af;
+  white-space: nowrap;
+}
+
+.kitchen-stats-bars .tone-good,
+.kitchen-stats-table .tone-good { color: #4ade80; font-style: normal; }
+.kitchen-stats-bars .tone-mid,
+.kitchen-stats-table .tone-mid { color: #facc15; font-style: normal; }
+.kitchen-stats-bars .tone-bad,
+.kitchen-stats-table .tone-bad { color: #f87171; font-style: normal; }
+
+.kitchen-stats-table-wrap {
+  overflow-x: auto;
+}
+
+.kitchen-stats-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.kitchen-stats-table th,
+.kitchen-stats-table td {
+  text-align: left;
+  padding: 0.55rem 0.65rem;
+  border-bottom: 1px solid var(--bs-dark-border, #374151);
+}
+
+.kitchen-stats-table th {
+  color: #9ca3af;
+  font-weight: 600;
+}
+
+.kitchen-stats-panel .spin {
+  animation: kitchen-spin 0.8s linear infinite;
+}
+
+@keyframes kitchen-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 720px) {
+  .kitchen-stats-bars li {
+    grid-template-columns: 1fr;
+    gap: 0.25rem;
+  }
+  .kitchen-stats-bars .bar-meta {
+    text-align: left;
+  }
+}
+
+
 .kitchen-filters {
   display: flex;
   gap: 1rem;
@@ -10662,6 +11129,151 @@ html, body {
   color: var(--bs-dark-text-muted);
   line-height: 1.35;
   max-width: 42rem;
+}
+
+.kitchen-view-toggles {
+  display: inline-flex;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.kitchen-toggle-btn.active {
+  background: rgba(245, 158, 11, 0.2) !important;
+  color: #f59e0b !important;
+  border-color: rgba(245, 158, 11, 0.45) !important;
+}
+
+.kitchen-view-menu {
+  position: relative;
+  display: inline-flex;
+}
+
+.kitchen-view-menu-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.kitchen-chevron-open {
+  transform: rotate(180deg);
+}
+
+.kitchen-view-dropdown {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.4rem);
+  z-index: 40;
+  min-width: 14rem;
+  padding: 0.5rem 0;
+  background: var(--bs-dark-surface-elevated);
+  border: 1px solid var(--bs-dark-border);
+  border-radius: 10px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45);
+}
+
+.kitchen-view-dropdown-label {
+  margin: 0;
+  padding: 0.35rem 0.85rem;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--bs-dark-text-muted);
+}
+
+.kitchen-view-dropdown hr {
+  border: none;
+  border-top: 1px solid var(--bs-dark-border);
+  margin: 0.35rem 0;
+}
+
+.kitchen-view-dropdown button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: transparent;
+  border: none;
+  color: var(--bs-dark-text);
+  padding: 0.55rem 0.85rem;
+  font-size: 0.875rem;
+  cursor: pointer;
+  text-align: left;
+}
+
+.kitchen-view-dropdown button:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.kitchen-view-dropdown button.active {
+  color: #f59e0b;
+}
+
+.kitchen-view-dropdown button.active-order {
+  color: #60a5fa;
+}
+
+.kitchen-detail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  width: 100%;
+}
+
+.kitchen-detail-row {
+  background: var(--bs-dark-surface-elevated);
+  border: 1px solid var(--bs-dark-border);
+  border-radius: 12px;
+  padding: 1rem 1.25rem;
+}
+
+.kitchen-detail-row-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.kitchen-detail-check {
+  padding-top: 0.25rem;
+}
+
+.kitchen-detail-titles {
+  flex: 1;
+  min-width: 0;
+}
+
+.kitchen-detail-titles h3 {
+  margin: 0 0 0.25rem;
+  font-size: 1.25rem;
+  color: var(--bs-dark-text);
+}
+
+.kitchen-detail-titles p {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--bs-dark-text-muted);
+}
+
+.kitchen-detail-items {
+  list-style: none;
+  margin: 0 0 0.85rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.kitchen-detail-items li {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 8px;
+  padding: 0.5rem 0.75rem;
+  color: var(--bs-dark-text);
+  font-size: 0.95rem;
+}
+
+.kitchen-detail-items em {
+  color: var(--bs-dark-text-muted);
+  font-style: normal;
 }
 
 /* Kitchen Web Style - Tabs y cards tipo bizneai.com */
@@ -12861,3 +13473,165 @@ html, body {
 }
 .kioskv-pay-btn:hover:not(:disabled) { background: #047857; }
 .kioskv-pay-btn:disabled { background: #cbd5e1; cursor: not-allowed; }
+
+/* Sales OLAP report panel (desktop) */
+.sales-olap-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 0.25rem 0 1rem;
+}
+
+.sales-olap-toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.sales-olap-toolbar h3 {
+  margin: 0;
+  font-size: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.sales-olap-toolbar p {
+  margin: 0.15rem 0 0;
+  font-size: 0.75rem;
+  color: var(--bs-dark-text-muted, #9ca3af);
+}
+
+.sales-olap-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 2rem;
+  color: var(--bs-dark-text-muted, #9ca3af);
+}
+
+.sales-olap-error {
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  color: #fca5a5;
+  padding: 0.65rem 0.85rem;
+  border-radius: 8px;
+  font-size: 0.85rem;
+}
+
+.sales-olap-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 0.65rem;
+}
+
+.sales-olap-kpi {
+  background: var(--bs-dark-surface-elevated, #1f2937);
+  border: 1px solid var(--bs-dark-border, #374151);
+  border-radius: 10px;
+  padding: 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  align-items: flex-start;
+}
+
+.sales-olap-kpi strong {
+  font-size: 1.35rem;
+}
+
+.sales-olap-kpi span {
+  font-size: 0.75rem;
+  color: var(--bs-dark-text-muted, #9ca3af);
+}
+
+.sales-olap-kpi.highlight strong {
+  color: #4ade80;
+}
+
+.sales-olap-section {
+  background: var(--bs-dark-surface-elevated, #1f2937);
+  border: 1px solid var(--bs-dark-border, #374151);
+  border-radius: 10px;
+  padding: 0.85rem 1rem;
+}
+
+.sales-olap-section h4 {
+  margin: 0 0 0.65rem;
+  font-size: 0.9rem;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.sales-olap-bars {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.sales-olap-bars li {
+  display: grid;
+  grid-template-columns: 6.5rem 1fr minmax(7rem, auto);
+  gap: 0.5rem;
+  align-items: center;
+  font-size: 0.82rem;
+}
+
+.sales-olap-bars .label {
+  font-family: ui-monospace, monospace;
+  color: #d1d5db;
+}
+
+.sales-olap-bars .track {
+  height: 7px;
+  background: #374151;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.sales-olap-bars .fill {
+  height: 100%;
+  background: #10b981;
+  border-radius: 999px;
+}
+
+.sales-olap-bars .meta {
+  text-align: right;
+  color: #9ca3af;
+}
+
+.sales-olap-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 0.75rem;
+}
+
+.sales-olap-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.sales-olap-table th,
+.sales-olap-table td {
+  text-align: left;
+  padding: 0.4rem 0.35rem;
+  border-bottom: 1px solid var(--bs-dark-border, #374151);
+}
+
+.sales-olap-table th {
+  color: #9ca3af;
+  font-weight: 600;
+}
+
+.sales-olap-table td.money {
+  color: #4ade80;
+  font-weight: 600;
+}

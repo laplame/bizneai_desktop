@@ -15,6 +15,7 @@ import {
   Warehouse,
   CloudDownload,
   Layers,
+  Truck,
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import {
@@ -25,7 +26,10 @@ import {
   mergeProductsFromServerPreserveImages,
   fetchMcpInventoryStatusStockRows,
   applyMcpInventoryStockRowsToProducts,
+  getShopId,
 } from '../utils/shopIdHelper';
+import { updateProductConsignment } from '../api/consignment';
+import { enqueueOfflineWrite } from '../services/offlineWriteQueue';
 import { syncProductImagesToLocalDisk } from '../services/productImageLocalCache';
 import { isSyncDue, isBatchDue, syncMcpBatch } from '../utils/syncService';
 import { shouldShowImage, markImageFailed } from '../utils/imageCache';
@@ -40,7 +44,7 @@ import type { ManagedProduct as Product } from '../types/domain';
 interface ProductManagementProps {
   isOpen: boolean;
   onClose: () => void;
-  initialView?: 'list' | 'grid' | 'analytics' | 'inventory';
+  initialView?: 'list' | 'grid' | 'analytics' | 'inventory' | 'components';
   restockProduct?: { id: number | string; name: string } | null;
   onRestockComplete?: (productToAdd?: unknown) => void;
 }
@@ -178,13 +182,21 @@ const ProductManagement = ({ isOpen, onClose, initialView, restockProduct, onRes
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [stockFilter, setStockFilter] = useState('all');
-  const [view, setView] = useState<'list' | 'grid' | 'analytics' | 'inventory'>('list');
+  const [view, setView] = useState<'list' | 'grid' | 'analytics' | 'inventory' | 'components'>('list');
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [editingProduct, setEditingProduct] = useState<Partial<Product>>({});
   /** Producto resaltado en lista/cuadrícula; panel derecho muestra componentes. */
   const [panelProductId, setPanelProductId] = useState<number | string | null>(null);
+  const [consignmentModalProduct, setConsignmentModalProduct] = useState<Product | null>(null);
+  const [consignmentForm, setConsignmentForm] = useState<{
+    isConsignment: boolean;
+    consignmentSupplier: string;
+    consignmentUnitCost: string;
+    consignmentNotes: string;
+  }>({ isConsignment: false, consignmentSupplier: '', consignmentUnitCost: '', consignmentNotes: '' });
+  const [isSavingConsignment, setIsSavingConsignment] = useState(false);
   const isLoadingRef = useRef(false);
   const hasLoadedForOpenRef = useRef(false);
   const hasServerDataRef = useRef(false);
@@ -502,6 +514,57 @@ const ProductManagement = ({ isOpen, onClose, initialView, restockProduct, onRes
     }
   };
 
+  const handleOpenConsignmentModal = (product: Product) => {
+    setConsignmentModalProduct(product);
+    setConsignmentForm({
+      isConsignment: Boolean(product.isConsignment),
+      consignmentSupplier: product.consignmentSupplier || '',
+      consignmentUnitCost: product.consignmentUnitCost != null ? String(product.consignmentUnitCost) : '',
+      consignmentNotes: product.consignmentNotes || '',
+    });
+  };
+
+  const handleSaveConsignment = async () => {
+    if (!consignmentModalProduct) return;
+    const shopId = getShopId();
+    const productId = String(consignmentModalProduct.id);
+    if (!shopId || !/^[a-f0-9]{24}$/i.test(productId)) {
+      toast.error('Este producto no está sincronizado con el servidor (sin ID de tienda o producto local).');
+      return;
+    }
+    if (consignmentForm.isConsignment && !consignmentForm.consignmentSupplier.trim()) {
+      toast.error('Ingresa el nombre del proveedor.');
+      return;
+    }
+    setIsSavingConsignment(true);
+    const unitCost = parseFloat(consignmentForm.consignmentUnitCost);
+    const consignmentFields = {
+      isConsignment: consignmentForm.isConsignment,
+      consignmentSupplier: consignmentForm.consignmentSupplier.trim() || undefined,
+      consignmentUnitCost: Number.isFinite(unitCost) ? unitCost : undefined,
+      consignmentNotes: consignmentForm.consignmentNotes.trim() || undefined,
+    };
+    const res = await updateProductConsignment(shopId, productId, consignmentFields);
+    setIsSavingConsignment(false);
+    const applyLocally = () => {
+      const updatedProducts = products.map((p) =>
+        p.id === consignmentModalProduct.id ? { ...p, ...consignmentFields } : p
+      );
+      persistProducts(updatedProducts);
+      setConsignmentModalProduct(null);
+    };
+    if (res.success) {
+      toast.success(consignmentForm.isConsignment ? 'Producto marcado como consignación' : 'Consignación desactivada');
+      applyLocally();
+    } else if (res.retriable) {
+      enqueueOfflineWrite('consignment-update', { shopId, productId, fields: consignmentFields });
+      toast.success('Sin conexión: se guardó local y se enviará al servidor al reconectar.');
+      applyLocally();
+    } else {
+      toast.error(res.error || 'No se pudo guardar la consignación');
+    }
+  };
+
   const handleStockUpdate = (productId: number | string, newStock: number) => {
     const updatedProducts = products.map(p =>
       p.id === productId ? { ...p, stock: newStock, updatedAt: new Date().toISOString() } : p
@@ -785,6 +848,13 @@ const ProductManagement = ({ isOpen, onClose, initialView, restockProduct, onRes
                 </td>
                 <td>
                   <div className="action-buttons" onClick={(e) => e.stopPropagation()}>
+                    <button
+                      className={`action-btn${product.isConsignment ? ' is-active' : ''}`}
+                      onClick={() => handleOpenConsignmentModal(product)}
+                      title={product.isConsignment ? `Consignación: ${product.consignmentSupplier || 'sin proveedor'}` : 'Marcar como consignación'}
+                    >
+                      <Truck size={16} />
+                    </button>
                     <button className="action-btn" onClick={() => handleEditProduct(product)} title="Editar">
                       <Edit size={16} />
                     </button>
@@ -871,6 +941,10 @@ const ProductManagement = ({ isOpen, onClose, initialView, restockProduct, onRes
             </div>
             
             <div className="product-card-actions" onClick={(e) => e.stopPropagation()}>
+              <button className="btn-secondary" onClick={() => handleOpenConsignmentModal(product)}>
+                <Truck size={16} />
+                {product.isConsignment ? 'Consignación' : 'Marcar consig.'}
+              </button>
               <button className="btn-secondary" onClick={() => handleEditProduct(product)}>
                 <Edit size={16} />
                 Editar
@@ -985,17 +1059,17 @@ const ProductManagement = ({ isOpen, onClose, initialView, restockProduct, onRes
       <aside className="product-components-aside" aria-label="Componentes del producto">
         <div className="product-components-aside-header">
           <Layers size={18} aria-hidden />
-          <span>Componentes</span>
+          <span>Detalle</span>
         </div>
         {showListHint && (
           <p className="product-components-hint">
-            En <strong>Lista</strong> o <strong>Cuadrícula</strong>, haz clic en un producto para ver insumos o receta aquí.
+            En <strong>Lista</strong>, <strong>Cuadrícula</strong> o <strong>Componentes</strong>, haz clic en un producto para ver insumos o receta aquí.
           </p>
         )}
         {!panelProduct ? (
           <p className="product-components-empty">
             {showListHint
-              ? 'Selecciona un producto en Lista o Cuadrícula para ver sus componentes aquí.'
+              ? 'Selecciona un producto en Lista, Cuadrícula o Componentes para ver el detalle aquí.'
               : 'Selecciona un producto en la tabla o en la cuadrícula.'}
           </p>
         ) : (
@@ -1039,6 +1113,83 @@ const ProductManagement = ({ isOpen, onClose, initialView, restockProduct, onRes
           </>
         )}
       </aside>
+    );
+  };
+
+  const renderComponentsView = () => {
+    const withComponents = filteredProducts.filter(
+      (p) => resolveProductComponents(p).length > 0
+    );
+    const withoutComponents = filteredProducts.filter(
+      (p) => resolveProductComponents(p).length === 0
+    );
+
+    return (
+      <div className="components-view">
+        <div className="components-view-summary">
+          <div className="components-stat">
+            <strong>{withComponents.length}</strong>
+            <span>Con receta / insumos</span>
+          </div>
+          <div className="components-stat">
+            <strong>{withoutComponents.length}</strong>
+            <span>Sin componentes</span>
+          </div>
+          <div className="components-stat">
+            <strong>{filteredProducts.length}</strong>
+            <span>En filtro actual</span>
+          </div>
+        </div>
+
+        {withComponents.length === 0 ? (
+          <div className="components-view-empty">
+            <Layers size={40} aria-hidden />
+            <p>Ningún producto del filtro tiene componentes o receta definidos.</p>
+            <p className="components-view-empty-hint">
+              Los insumos se muestran cuando el catálogo MCP (o el producto local) incluye el campo <code>components</code>.
+            </p>
+          </div>
+        ) : (
+          <div className="components-cards">
+            {withComponents.map((product) => {
+              const components = resolveProductComponents(product);
+              const selected = panelProductId === product.id;
+              return (
+                <button
+                  key={product.id}
+                  type="button"
+                  className={`components-card ${selected ? 'is-selected' : ''}`}
+                  onClick={() => setPanelProductId(product.id)}
+                >
+                  <div className="components-card-header">
+                    <div className="components-card-title-block">
+                      <span className="components-card-name">{product.name}</span>
+                      <span className="category-badge">{product.category}</span>
+                    </div>
+                    <span className="components-card-count">
+                      {components.length}{' '}
+                      {components.length === 1 ? 'insumo' : 'insumos'}
+                    </span>
+                  </div>
+                  <ul className="components-card-list">
+                    {components.map((c, i) => (
+                      <li key={`${product.id}-${c.name}-${i}`}>
+                        <span>{c.name}</span>
+                        {(c.quantity != null || c.unit) && (
+                          <span className="component-qty">
+                            {c.quantity != null ? String(c.quantity) : ''}
+                            {c.unit ? ` ${c.unit}` : ''}
+                          </span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
     );
   };
 
@@ -1192,6 +1343,13 @@ const ProductManagement = ({ isOpen, onClose, initialView, restockProduct, onRes
               <BarChart3 size={20} />
               Análisis
             </button>
+            <button
+              className={`view-tab ${view === 'components' ? 'active' : ''}`}
+              onClick={() => setView('components')}
+            >
+              <Layers size={20} />
+              Componentes
+            </button>
           </div>
 
           {/* Contenido de la vista */}
@@ -1208,6 +1366,7 @@ const ProductManagement = ({ isOpen, onClose, initialView, restockProduct, onRes
               />
             )}
             {view === 'analytics' && renderAnalytics()}
+            {view === 'components' && renderComponentsView()}
           </div>
             </div>
             {renderComponentsAside()}
@@ -1217,6 +1376,76 @@ const ProductManagement = ({ isOpen, onClose, initialView, restockProduct, onRes
 
       {/* Modales */}
       {(isAddModalOpen || isEditModalOpen) && renderProductForm()}
+
+      {consignmentModalProduct && (
+        <div className="modal-overlay" onClick={() => setConsignmentModalProduct(null)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>
+                <Truck size={20} style={{ verticalAlign: 'text-bottom', marginRight: 8 }} />
+                Consignación · {consignmentModalProduct.name}
+              </h3>
+              <button className="close-btn" onClick={() => setConsignmentModalProduct(null)}>
+                <X size={20} />
+              </button>
+            </div>
+            <div className="modal-body">
+              <div className="checkbox-group">
+                <input
+                  type="checkbox"
+                  id="isConsignmentToggle"
+                  checked={consignmentForm.isConsignment}
+                  onChange={(e) => setConsignmentForm((prev) => ({ ...prev, isConsignment: e.target.checked }))}
+                />
+                <label htmlFor="isConsignmentToggle">Este producto es de consignación (el proveedor cobra por unidad vendida)</label>
+              </div>
+
+              {consignmentForm.isConsignment && (
+                <>
+                  <div className="form-group">
+                    <label>Proveedor / consignador *</label>
+                    <input
+                      type="text"
+                      value={consignmentForm.consignmentSupplier}
+                      onChange={(e) => setConsignmentForm((prev) => ({ ...prev, consignmentSupplier: e.target.value }))}
+                      placeholder="Nombre del proveedor"
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>Costo unitario a pagar al proveedor</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={consignmentForm.consignmentUnitCost}
+                      onChange={(e) => setConsignmentForm((prev) => ({ ...prev, consignmentUnitCost: e.target.value }))}
+                      placeholder="0.00"
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>Notas</label>
+                    <input
+                      type="text"
+                      value={consignmentForm.consignmentNotes}
+                      onChange={(e) => setConsignmentForm((prev) => ({ ...prev, consignmentNotes: e.target.value }))}
+                      placeholder="Opcional"
+                    />
+                  </div>
+                </>
+              )}
+            </div>
+            <div className="modal-footer">
+              <button className="btn-secondary" onClick={() => setConsignmentModalProduct(null)}>
+                Cancelar
+              </button>
+              <button className="btn-primary" onClick={() => void handleSaveConsignment()} disabled={isSavingConsignment}>
+                <Save size={16} />
+                {isSavingConsignment ? 'Guardando...' : 'Guardar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

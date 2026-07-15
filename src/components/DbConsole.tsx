@@ -17,7 +17,7 @@ function formatFetchError(e: unknown, origin: string): string {
       'En Windows, lo más habitual es:',
       '• Node.js no instalado o no está en el PATH — el POS arranca el API con el comando `node`. Instala Node LTS desde nodejs.org y reinicia el equipo o la sesión.',
       '• Falta dist-backend en la instalación — al construir el instalador debe ejecutarse npm run build:server.',
-      '• El puerto 3000 lo usa otra aplicación.',
+      '• El puerto 3001 lo usa otra aplicación.',
       '',
       `Detalle: ${raw}`,
     ].join('\n');

@@ -21,7 +21,7 @@ fs.mkdirSync(process.env.BIZNEAI_USER_DATA, { recursive: true });
 // eslint-disable-next-line import/no-dynamic-require
 const mod = require('./bizneai-server.cjs');
 
-const port = Number(process.env.PORT) || 3000;
+const port = Number(process.env.PORT) || 3001;
 mod.startBizneaiServer(port).catch((err) => {
   console.error('[bizneai-local-api]', err);
   process.exit(1);

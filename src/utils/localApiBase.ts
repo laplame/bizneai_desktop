@@ -1,9 +1,9 @@
 /**
- * URL base del API local (Express :3000).
- * - Vite dev: localhost
- * - Electron con file:// o app empaquetada: 127.0.0.1
+ * URL base del API local (Express :3001).
+ * - Vite / Electron POS (desktop)
+ * - :3000 queda libre para sites/bizneaiWeb u otros backends
  */
-export const LOCAL_API_PORT = 3000;
+export const LOCAL_API_PORT = 3001;
 
 export function getLocalApiOrigin(): string {
   if (typeof window === 'undefined') {
@@ -19,7 +19,7 @@ export function getLocalApiOrigin(): string {
   return `http://127.0.0.1:${LOCAL_API_PORT}`;
 }
 
-/** True si el API local (proxy :3000) debe usarse: Vite localhost o Electron file:// */
+/** True si el API local (proxy :3001) debe usarse: Vite localhost o Electron file:// */
 export function shouldUseSalesMcpProxy(): boolean {
   if (typeof window === 'undefined') return true;
   const o = window.location?.origin || '';
