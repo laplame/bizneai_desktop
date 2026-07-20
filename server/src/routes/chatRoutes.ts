@@ -1,11 +1,16 @@
 /**
- * ⚠️  MOCK / LEGACY ROUTE — NOT the source of truth for the desktop POS.
+ * Chat del asistente de IA (BizneAIChat) para la app de escritorio.
  *
- * This router keeps an in-memory array that RESETS on every restart. It is a
- * vestige of the forked BizneAI cloud API and is NOT how the desktop app
- * persists data. Do not build features against it assuming durability.
+ * El historial de mensajes se mantiene en memoria (RESETEA en cada reinicio del
+ * servidor) — el cliente conserva su propio historial en localStorage
+ * ('bizneai-chat-history') como fuente persistente real. Esta ruta solo sirve
+ * para generar la respuesta de IA y devolver un historial reciente en la sesión actual.
  *
- * Real desktop data flow:
+ * La respuesta de IA sí es real: usa Gemini (geminiChatService.ts) con el mismo
+ * cálculo de tokens/costo que la app móvil, y reporta el uso a
+ * POST https://www.bizneai.com/api/bizneai-chat para el dashboard de AI Interactions.
+ *
+ * Real desktop data flow (para todo lo demás):
  *   localStorage  →  PUT/GET /api/pos/kv (posKvRoutes)  →  SQLite (pos-local-store)
  *   catalog/stock →  MCP proxy /api/proxy (mcpProxyRoutes)
  *   sales ledger  →  /api/merkle-ledger (merkleLedgerRoutes)  +  local-activity DB
@@ -14,16 +19,31 @@
 
 import express from 'express';
 import { z } from 'zod';
+import {
+  DESKTOP_CHAT_SESSION_ID,
+  calculateGeminiCost,
+  generateGeminiReply,
+  saveChatUsage
+} from '../services/geminiChatService.js';
 
 const router = express.Router();
 
 // Chat schemas
+const chatHistoryTurnSchema = z.object({
+  senderType: z.enum(['customer', 'ai', 'staff']),
+  content: z.string()
+});
+
 const createChatMessageSchema = z.object({
   content: z.string().min(1, 'Message content is required'),
-  context: z.record(z.any()).optional(),
+  // z.record() en Zod v4 requiere (keySchema, valueSchema); con un solo argumento el
+  // valueSchema queda undefined y el parse truena en cuanto el objeto trae alguna key.
+  context: z.record(z.string(), z.any()).optional(),
   senderType: z.enum(['customer', 'ai', 'staff']).default('customer'),
   messageType: z.enum(['text', 'image', 'file']).default('text'),
-  metadata: z.record(z.any()).optional()
+  metadata: z.record(z.string(), z.any()).optional(),
+  geminiApiKey: z.string().optional(),
+  history: z.array(chatHistoryTurnSchema).optional()
 });
 
 const chatQuerySchema = z.object({
@@ -43,31 +63,77 @@ router.post('/shop/:shopId', async (req, res) => {
   try {
     const { shopId } = z.object({ shopId: z.string() }).parse(req.params);
     const messageData = createChatMessageSchema.parse(req.body);
-    
+
     const customerMessage = {
       _id: `msg_${Date.now()}`,
       shopId,
-      ...messageData,
-      timestamp: new Date().toISOString(),
-      status: 'sent'
-    };
-    
-    chatMessages.push(customerMessage);
-    
-    // Simulate AI response
-    const aiResponse = {
-      _id: `ai_${Date.now()}`,
-      shopId,
-      content: `Gracias por tu mensaje: "${messageData.content}". Un representante de la tienda te responderá pronto.`,
+      content: messageData.content,
       context: messageData.context || {},
-      senderType: 'ai' as const,
-      messageType: 'text' as const,
+      senderType: messageData.senderType,
+      messageType: messageData.messageType,
+      metadata: messageData.metadata,
       timestamp: new Date().toISOString(),
       status: 'sent'
     };
-    
+
+    chatMessages.push(customerMessage);
+
+    const apiKey = messageData.geminiApiKey?.trim() || process.env.GEMINI_API_KEY?.trim();
+    if (!apiKey) {
+      return res.status(422).json({
+        success: false,
+        error: 'GEMINI_API_KEY_MISSING',
+        message: 'Configura tu API key de Gemini en Configuración → IA para usar el asistente.'
+      });
+    }
+
+    const history = (messageData.history || [])
+      .slice(-10)
+      .map((h) => ({ role: (h.senderType === 'ai' ? 'model' : 'user') as 'model' | 'user', text: h.content }));
+
+    let aiResponse;
+    try {
+      const context = messageData.context || {};
+      const result = await generateGeminiReply({
+        apiKey,
+        shopId,
+        storeName: typeof context.storeName === 'string' ? context.storeName : undefined,
+        storeType: typeof context.businessType === 'string' ? context.businessType : undefined,
+        history,
+        userMessage: messageData.content
+      });
+
+      const cost = calculateGeminiCost(result.usageMetadata);
+      // Fire-and-forget: no bloquea la respuesta al usuario aunque falle el tracking.
+      void saveChatUsage({
+        chatId: DESKTOP_CHAT_SESSION_ID,
+        shopId,
+        usageMetadata: result.usageMetadata,
+        cost,
+        model: result.model
+      });
+
+      aiResponse = {
+        _id: `ai_${Date.now()}`,
+        shopId,
+        content: result.text,
+        context,
+        senderType: 'ai' as const,
+        messageType: 'text' as const,
+        timestamp: new Date().toISOString(),
+        status: 'sent'
+      };
+    } catch (aiError) {
+      console.error('[Chat] Error llamando a Gemini:', aiError);
+      return res.status(502).json({
+        success: false,
+        error: 'GEMINI_REQUEST_FAILED',
+        message: aiError instanceof Error ? aiError.message : 'No se pudo obtener respuesta de Gemini.'
+      });
+    }
+
     chatMessages.push(aiResponse);
-    
+
     res.json({
       success: true,
       data: {

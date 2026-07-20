@@ -207,6 +207,7 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
   // AI Settings
   const [aiSettings, setAiSettings] = useState({
     openaiApiKey: '',
+    geminiApiKey: typeof window !== 'undefined' ? localStorage.getItem('bizneai-gemini-key') || '' : '',
     aiEnabled: false,
     responseStyle: 'professional',
     detailLevel: 'detailed',
@@ -2180,6 +2181,38 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
       {/* AI Settings */}
       {renderSection('ai-settings', 'Configuración de IA', <Brain size={20} />,
         <div className="settings-form">
+          <div className="form-group">
+            <label>Gemini API Key</label>
+            <div className="api-key-input-group">
+              <input
+                type={showPasscode ? 'text' : 'password'}
+                value={aiSettings.geminiApiKey}
+                onChange={(e) => setAiSettings(prev => ({ ...prev, geminiApiKey: e.target.value }))}
+                placeholder="AIza..."
+              />
+              <button onClick={() => setShowPasscode(!showPasscode)} className="icon-btn">
+                {showPasscode ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
+            <button
+              onClick={() => {
+                if (aiSettings.geminiApiKey) {
+                  localStorage.setItem('bizneai-gemini-key', aiSettings.geminiApiKey);
+                  setAiSettings(prev => ({ ...prev, aiEnabled: true }));
+                  toast.success('API Key de Gemini guardada. Asistente de IA habilitado');
+                }
+              }}
+              className="btn-secondary"
+              disabled={!aiSettings.geminiApiKey}
+            >
+              <Save size={16} />
+              Guardar API Key
+            </button>
+            <p style={{ color: 'var(--bs-dark-text-muted)', fontSize: '0.8125rem', marginTop: '0.5rem' }}>
+              El asistente de IA de la app de escritorio usa Google Gemini. Obtén tu API key en{' '}
+              <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">aistudio.google.com/apikey</a>.
+            </p>
+          </div>
           <div className="form-group">
             <label>OpenAI API Key</label>
             <div className="api-key-input-group">

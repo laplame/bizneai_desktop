@@ -25,7 +25,7 @@ const createInventoryUpdateSchema = z.object({
   reason: z.string().min(1, 'Reason is required'),
   locationId: z.string().optional(),
   notes: z.string().optional(),
-  metadata: z.record(z.any()).optional()
+  metadata: z.record(z.string(), z.any()).optional()
 });
 
 const inventoryQuerySchema = z.object({

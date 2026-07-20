@@ -26,7 +26,7 @@ const createPaymentSchema = z.object({
   status: z.enum(['pending', 'completed', 'failed', 'cancelled']).default('completed'),
   description: z.string().optional(),
   transactionId: z.string().optional(),
-  metadata: z.record(z.any()).optional()
+  metadata: z.record(z.string(), z.any()).optional()
 });
 
 const paymentQuerySchema = z.object({

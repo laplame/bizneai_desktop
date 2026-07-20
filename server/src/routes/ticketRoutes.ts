@@ -35,7 +35,7 @@ const createTicketSchema = z.object({
   paymentMethod: z.string(),
   status: z.enum(['pending', 'completed', 'cancelled', 'refunded']).default('completed'),
   notes: z.string().optional(),
-  metadata: z.record(z.any()).optional()
+  metadata: z.record(z.string(), z.any()).optional()
 });
 
 const ticketQuerySchema = z.object({

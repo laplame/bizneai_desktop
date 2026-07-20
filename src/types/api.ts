@@ -368,6 +368,10 @@ export interface CreateChatMessageRequest {
   senderType: 'customer' | 'ai' | 'staff';
   messageType: 'text' | 'image' | 'file';
   metadata?: Record<string, any>;
+  /** API key de Gemini del usuario (Configuración → IA). El servidor no la persiste. */
+  geminiApiKey?: string;
+  /** Historial reciente de la conversación, para mantener contexto multi-turno. */
+  history?: Array<{ senderType: 'customer' | 'ai' | 'staff'; content: string }>;
 }
 
 export interface ChatSession {

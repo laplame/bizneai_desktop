@@ -102,120 +102,65 @@ const BizneAIChat: React.FC<BizneAIChatProps> = ({ isOpen = true }) => {
     const newMessages = [...messages, userMessage];
     setMessages(newMessages);
     saveToLocalStorage(newMessages);
+    const sentMessage = inputMessage;
     setInputMessage('');
     setIsLoading(true);
     setSelectedMessageId(null);
 
-    try {
-      const response = await chatAPI.sendMessage(storeIdentifiers._id, {
-        content: inputMessage,
-        context: {
-          businessType: storeIdentifiers.storeType || 'general',
-          timestamp: new Date().toISOString()
-        },
-        senderType: 'customer',
-        messageType: 'text'
-      });
-
-      if (response.success && response.data) {
-        const updatedMessages = [...newMessages, response.data.aiResponse];
-        setMessages(updatedMessages);
-        saveToLocalStorage(updatedMessages);
-      } else {
-        // Simulate AI response if API fails
-        const aiResponse: ChatMessage = {
-          _id: `ai_${Date.now()}`,
-          shopId: storeIdentifiers._id,
-          content: generateMockResponse(inputMessage),
-          context: {},
-          senderType: 'ai',
-          messageType: 'text',
-          timestamp: new Date().toISOString(),
-          status: 'sent'
-        };
-        const updatedMessages = [...newMessages, aiResponse];
-        setMessages(updatedMessages);
-        saveToLocalStorage(updatedMessages);
-      }
-    } catch (error) {
-      console.error('Error sending message:', error);
-      // Generate mock response on error
-      const aiResponse: ChatMessage = {
+    const pushErrorMessage = (content: string) => {
+      const errorMessage: ChatMessage = {
         _id: `ai_${Date.now()}`,
-        shopId: storeIdentifiers._id,
-        content: generateMockResponse(inputMessage),
+        shopId: storeIdentifiers._id!,
+        content,
         context: {},
         senderType: 'ai',
         messageType: 'text',
         timestamp: new Date().toISOString(),
         status: 'sent'
       };
-      const updatedMessages = [...newMessages, aiResponse];
+      const updatedMessages = [...newMessages, errorMessage];
       setMessages(updatedMessages);
       saveToLocalStorage(updatedMessages);
-      toast.error('Error al enviar mensaje. Usando respuesta simulada.');
+    };
+
+    try {
+      const geminiApiKey = localStorage.getItem('bizneai-gemini-key') || undefined;
+      const history = messages.slice(-10).map((m) => ({ senderType: m.senderType, content: m.content }));
+
+      const response = await chatAPI.sendMessage(storeIdentifiers._id, {
+        content: sentMessage,
+        context: {
+          businessType: storeIdentifiers.storeType || 'general',
+          storeName: storeIdentifiers.storeName || undefined,
+          timestamp: new Date().toISOString()
+        },
+        senderType: 'customer',
+        messageType: 'text',
+        geminiApiKey,
+        history
+      });
+
+      if (response.success && response.data) {
+        const updatedMessages = [...newMessages, response.data.aiResponse];
+        setMessages(updatedMessages);
+        saveToLocalStorage(updatedMessages);
+      } else if (response.error === 'GEMINI_API_KEY_MISSING') {
+        const text = 'No tienes configurada tu API key de Gemini. Ve a Configuración → IA para agregarla y poder usar el asistente.';
+        toast.error(text);
+        pushErrorMessage(text);
+      } else {
+        const text = response.message || 'No se pudo obtener respuesta del asistente de IA. Intenta de nuevo en unos segundos.';
+        toast.error(text);
+        pushErrorMessage(text);
+      }
+    } catch (error) {
+      console.error('Error sending message:', error);
+      const text = 'No se pudo conectar con el asistente de IA. Verifica tu conexión e inténtalo de nuevo.';
+      toast.error(text);
+      pushErrorMessage(text);
     } finally {
       setIsLoading(false);
     }
-  };
-
-  const generateMockResponse = (userMessage: string): string => {
-    const lowerMessage = userMessage.toLowerCase();
-    
-    if (lowerMessage.includes('venta') || lowerMessage.includes('sale')) {
-      return `¡Entendido! He procesado la venta simulada. Aquí tienes el resumen de la transacción y cómo afecta tus métricas en tiempo real:
-
-### Ticket de Venta
-* **Producto:** Producto Ejemplo
-* **Cantidad:** 1 unidad
-* **Precio Unitario:** $100
-* **Total de la Venta:** **$100**
-
----
-
-### Actualización de Inventario
-He actualizado el inventario según la venta procesada.
-* **Stock Anterior:** 10 unidades
-* **Venta:** -1 unidad
-* **Stock Nuevo:** **9 unidades**`;
-    }
-    
-    if (lowerMessage.includes('inventario') || lowerMessage.includes('inventory') || lowerMessage.includes('stock')) {
-      return `Aquí está la información actualizada de tu inventario:
-
-### Resumen de Inventario
-* **Total de productos:** 25
-* **Productos con stock bajo:** 3
-* **Productos agotados:** 1
-* **Valor total del inventario:** $15,000
-
-¿Te gustaría ver detalles de algún producto específico o recibir alertas de stock bajo?`;
-    }
-    
-    if (lowerMessage.includes('ventas') || lowerMessage.includes('sales') || lowerMessage.includes('reporte')) {
-      return `### Reporte de Ventas
-
-**Hoy:**
-* Total de ventas: $1,250
-* Número de transacciones: 15
-* Promedio por venta: $83.33
-
-**Esta semana:**
-* Total de ventas: $8,500
-* Número de transacciones: 102
-* Producto más vendido: Producto A (45 unidades)
-
-¿Necesitas un reporte más detallado o de un período específico?`;
-    }
-    
-    return `¡Hola! Soy tu asistente inteligente de BizneAI. Estoy aquí para ayudarte con:
-
-* Gestión de ventas y transacciones
-* Control de inventario
-* Reportes y análisis
-* Consultas sobre productos y clientes
-
-¿En qué puedo ayudarte hoy?`;
   };
 
   const saveToLocalStorage = (messagesToSave: ChatMessage[]) => {

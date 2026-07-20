@@ -620,7 +620,7 @@ router.post('/check-similarity', async (req, res) => {
       category: z.string().min(1, 'Category is required'),
       mainCategory: z.string().min(1, 'Main category is required'),
       brand: z.string().optional(),
-      specifications: z.record(z.any()).optional(),
+      specifications: z.record(z.string(), z.any()).optional(),
       imageUrls: z.array(z.string()).optional(),
       businessId: z.string().min(1, 'Business ID is required'),
       threshold: z.number().min(0).max(1).default(0.90)
