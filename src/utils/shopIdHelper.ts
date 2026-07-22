@@ -562,10 +562,24 @@ function shouldKeepLocalUnchanged(
   return productDataFingerprint(prev) === productDataFingerprint(remote);
 }
 
+const normalizeSkuKey = (sku: unknown): string | null => {
+  const s = String(sku ?? '').trim().toLowerCase();
+  return s ? s : null;
+};
+
 /**
  * Tras traer el catálogo del servidor: conserva filas locales sin cambios si los datos
  * coinciden (misma huella / mismo updatedAt) y mantiene la imagen local si el remoto viene sin URL.
  * El orden y el conjunto de IDs siguen al listado remoto (fuente de verdad).
+ *
+ * Empareja primero por id; si no calza, cae a `sku` (cuando no está vacío)
+ * antes de tratar la fila remota como "nueva sin datos locales". Esto cubre
+ * productos que se agregaron localmente y luego se empujaron al servidor
+ * con un `_id` de Mongo distinto al id local (normalizeProductId hashea
+ * ambos distinto) — sin este fallback, la foto (y cualquier otro dato
+ * solo-local) se pierde en el primer sync tras el push. Ver
+ * docs/PROMOCION_TIEMPO_REAL_CATALOGO_MODELO.md / bug encontrado y
+ * arreglado junto con la reconciliación de id en ProductManagement.tsx.
  */
 export const mergeProductsFromServerPreserveImages = (
   localProducts: unknown[] | null | undefined,
@@ -573,12 +587,15 @@ export const mergeProductsFromServerPreserveImages = (
 ): Record<string, unknown>[] => {
   const local = Array.isArray(localProducts) ? localProducts : [];
   const localByKey = new Map<number, Record<string, unknown>>();
+  const localBySku = new Map<string, Record<string, unknown>>();
   for (let i = 0; i < local.length; i++) {
     const p = local[i];
     if (p && typeof p === 'object') {
       const row = p as Record<string, unknown>;
       const key = normalizeProductId(row.id, i);
       localByKey.set(key, row);
+      const skuKey = normalizeSkuKey(row.sku);
+      if (skuKey && !localBySku.has(skuKey)) localBySku.set(skuKey, row);
     }
   }
 
@@ -586,16 +603,23 @@ export const mergeProductsFromServerPreserveImages = (
   for (let i = 0; i < remoteMapped.length; i++) {
     const r = remoteMapped[i];
     const key = normalizeProductId(r.id, i);
-    const prev = localByKey.get(key);
+    const matchedById = localByKey.get(key);
+    const prev = matchedById ?? localBySku.get(normalizeSkuKey(r.sku) ?? '');
     if (!prev) {
       out.push(r);
       continue;
     }
-    if (shouldKeepLocalUnchanged(prev, r)) {
+    // El "fast path" (fila local intacta) solo aplica cuando YA matcheaba
+    // por id: ahí prev.id === r.id, no hay nada que reconciliar. Si vino
+    // del fallback por sku, prev todavía trae el id local viejo — hay que
+    // pasar SIEMPRE por el merge explícito para adoptar el id real del
+    // servidor y re-evaluar la imagen, aunque el resto de los campos
+    // rastreados (shouldKeepLocalUnchanged) coincidan.
+    if (matchedById && shouldKeepLocalUnchanged(prev, r)) {
       out.push(prev);
       continue;
     }
-    out.push({ ...prev, ...r, image: pickMergedImage(r, prev) });
+    out.push({ ...prev, ...r, id: r.id, image: pickMergedImage(r, prev) });
   }
   return out;
 };

@@ -7,12 +7,46 @@ import { registerOfflineExecutor } from './offlineWriteQueue';
 import { createPurchaseOrder, receivePurchaseOrder, type CreatePurchaseOrderPayload } from '../api/purchaseOrders';
 import { updateProductConsignment, type ConsignmentFields } from '../api/consignment';
 import { openCashRegister, closeCashRegister, addCashMovement, type CashMovementType } from '../api/cashRegister';
+import { pushLocalProductToServer } from '../api/products';
+import type { CreateProductRequest } from '../types/api';
 
 let registered = false;
+
+/**
+ * Mismo arreglo que `reconcileLocalProductId` en ProductManagement.tsx,
+ * pero para cuando el push exitoso llega tarde (reintento de la cola
+ * offline, sin componente React montado): reemplaza el id local por el
+ * `_id` real de Mongo directo en localStorage, para que el próximo sync no
+ * pierda datos solo-locales (como la foto) de este producto.
+ */
+function reconcileLocalProductIdInStorage(localId: unknown, serverId: string): void {
+  try {
+    const raw = localStorage.getItem('bizneai-products');
+    if (!raw) return;
+    const products = JSON.parse(raw);
+    if (!Array.isArray(products)) return;
+    const idx = products.findIndex((p) => p && typeof p === 'object' && p.id === localId);
+    if (idx === -1) return;
+    products[idx] = { ...products[idx], id: serverId };
+    localStorage.setItem('bizneai-products', JSON.stringify(products));
+    window.dispatchEvent(new Event('products-updated'));
+  } catch (err) {
+    console.warn('[offlineExecutors] No se pudo reconciliar el id del producto:', err);
+  }
+}
 
 export function registerAllOfflineExecutors(): void {
   if (registered) return;
   registered = true;
+
+  registerOfflineExecutor('product-create', async (payload) => {
+    const { localId, ...body } = payload as CreateProductRequest & { barcode?: string; localId?: unknown };
+    const res = await pushLocalProductToServer(body);
+    if (res.success && res.serverId && localId !== undefined) {
+      reconcileLocalProductIdInStorage(localId, res.serverId);
+    }
+    return { success: res.success, retriable: res.retriable, error: res.error };
+  });
 
   registerOfflineExecutor('purchase-order-create', async (payload) => {
     const { shopId, payload: body } = payload as { shopId: string; payload: CreatePurchaseOrderPayload };

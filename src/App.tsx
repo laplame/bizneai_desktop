@@ -78,6 +78,7 @@ import BarcodeScanner from './components/BarcodeScanner';
 import CheckoutModal from './components/CheckoutModal';
 import SalesReports from './components/SalesReports';
 import ProductManagement from './components/ProductManagement';
+import SyncValidityGate from './components/SyncValidityGate';
 import CustomerManagement from './components/CustomerManagement';
 import VirtualTicket from './components/VirtualTicket';
 import Settings from './components/Settings';
@@ -2712,6 +2713,8 @@ function App() {
             },
           }}
         />
+
+        <SyncValidityGate onGoToSettings={() => setActiveSection('settings')} />
 
         {/* Vista de autoservicio (kiosko): reemplaza el POS con la pantalla del cliente */}
         {kiosk && (

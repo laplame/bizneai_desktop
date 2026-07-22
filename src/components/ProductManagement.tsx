@@ -1,10 +1,10 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { 
-  Package, 
-  Plus, 
-  Edit, 
-  Trash2, 
-  Search, 
+import {
+  Package,
+  Plus,
+  Edit,
+  Trash2,
+  Search,
   Save,
   X,
   AlertTriangle,
@@ -16,6 +16,7 @@ import {
   CloudDownload,
   Layers,
   Truck,
+  Zap,
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import {
@@ -29,11 +30,15 @@ import {
   getShopId,
 } from '../utils/shopIdHelper';
 import { updateProductConsignment } from '../api/consignment';
+import { pushLocalProductToServer } from '../api/products';
+import type { CreateProductRequest } from '../types/api';
 import { enqueueOfflineWrite } from '../services/offlineWriteQueue';
 import { syncProductImagesToLocalDisk } from '../services/productImageLocalCache';
 import { isSyncDue, isBatchDue, syncMcpBatch } from '../utils/syncService';
 import { shouldShowImage, markImageFailed } from '../utils/imageCache';
+import { useStore } from '../contexts/StoreContext';
 import InventoryManagement from './InventoryManagement';
+import QuickDataModal from './QuickDataModal';
 import {
   type ProductComponentRow,
   getComponentsFromProductRecord,
@@ -185,6 +190,8 @@ const ProductManagement = ({ isOpen, onClose, initialView, restockProduct, onRes
   const [view, setView] = useState<'list' | 'grid' | 'analytics' | 'inventory' | 'components'>('list');
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [showQuickDataModal, setShowQuickDataModal] = useState(false);
+  const { storeIdentifiers } = useStore();
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [editingProduct, setEditingProduct] = useState<Partial<Product>>({});
   /** Producto resaltado en lista/cuadrícula; panel derecho muestra componentes. */
@@ -480,6 +487,73 @@ const ProductManagement = ({ isOpen, onClose, initialView, restockProduct, onRes
     window.dispatchEvent(new Event('products-updated'));
   };
 
+  /**
+   * Empuja un producto recién agregado localmente al servidor real
+   * (POST /api/products) — antes, "Agregar Producto" era 100% local y nunca
+   * llegaba al backend. Ese endpoint ya dispara la promoción en tiempo real
+   * al catálogo modelo del store-type (dedup por barcode), ver
+   * docs/PROMOCION_TIEMPO_REAL_CATALOGO_MODELO.md. No bloquea el guardado
+   * local (que ya ocurrió antes de llamar esto); si falla por conexión, se
+   * encola para reintentar (mismo mecanismo que ya usan Órdenes de Compra,
+   * Consignación y Caja en esta app).
+   */
+  const pushNewProductToServer = (product: Product) => {
+    const shopId = getShopId();
+    if (!shopId) return; // tienda sin configurar aún — nada que empujar
+
+    const payload: CreateProductRequest & { barcode?: string } = {
+      name: product.name,
+      description: product.description || '',
+      price: product.price,
+      cost: product.cost,
+      category: product.category,
+      mainCategory: '', // el backend lo autoasigna desde el storeType de la tienda
+      businessId: shopId,
+      stock: product.stock,
+      sku: product.sku,
+      barcode: product.barcode || undefined,
+      status: product.isActive ? 'active' : 'inactive',
+      images: product.image ? [product.image] : [],
+      tags: product.tags || [],
+    };
+
+    void pushLocalProductToServer(payload).then((res) => {
+      if (res.success && res.serverId) {
+        reconcileLocalProductId(product.id, res.serverId);
+      } else if (!res.success && res.retriable) {
+        // localId va en el payload para que el executor de la cola offline
+        // pueda reconciliar el id cuando el reintento sí tenga éxito, más
+        // tarde (ver registerAllOfflineExecutors en offlineExecutors.ts).
+        enqueueOfflineWrite(
+          'product-create',
+          { ...payload, localId: product.id },
+          `product-create-${product.id}`
+        );
+      } else if (!res.success) {
+        console.warn('[ProductManagement] Push a servidor no reintentable:', res.error);
+      }
+    });
+  };
+
+  /**
+   * Reemplaza el id local (numérico) de un producto por el `_id` real de
+   * Mongo tras un push exitoso al servidor. Sin esto, el próximo sync
+   * (`mergeProductsFromServerPreserveImages`) no reconoce que es el mismo
+   * producto — `normalizeProductId` hashea distinto un id numérico local
+   * que un `_id` de Mongo — y se pierde cualquier dato solo-local, como la
+   * foto cacheada (bug encontrado y arreglado en esta pasada).
+   */
+  const reconcileLocalProductId = (oldId: Product['id'], serverId: string) => {
+    setProducts((prev) => {
+      const idx = prev.findIndex((p) => p.id === oldId);
+      if (idx === -1) return prev;
+      const updated = [...prev];
+      updated[idx] = { ...updated[idx], id: serverId };
+      localStorage.setItem('bizneai-products', JSON.stringify(updated));
+      return updated;
+    });
+  };
+
   const handleSaveProduct = () => {
     if (isAddModalOpen) {
       const newProduct: Product = {
@@ -490,6 +564,7 @@ const ProductManagement = ({ isOpen, onClose, initialView, restockProduct, onRes
       };
       const updatedProducts = [...products, newProduct];
       persistProducts(updatedProducts);
+      pushNewProductToServer(newProduct);
       setIsAddModalOpen(false);
     } else if (isEditModalOpen && selectedProduct) {
       const updatedProducts = products.map(p =>
@@ -1270,6 +1345,16 @@ const ProductManagement = ({ isOpen, onClose, initialView, restockProduct, onRes
             >
               <Download size={20} />
             </button>
+            <button
+              type="button"
+              className="btn-primary"
+              title="Explorar el catálogo modelo de tu tipo de tienda e importar productos a tu inventario"
+              aria-label="Obtener Datos Rápidos"
+              onClick={() => setShowQuickDataModal(true)}
+            >
+              <Zap size={20} />
+              Datos Rápidos
+            </button>
             <button type="button" className="btn-primary" title={tooltipAddProduct} aria-label={tooltipAddProduct} onClick={handleAddProduct}>
               <Plus size={20} />
               Agregar Producto
@@ -1446,6 +1531,14 @@ const ProductManagement = ({ isOpen, onClose, initialView, restockProduct, onRes
           </div>
         </div>
       )}
+
+      <QuickDataModal
+        open={showQuickDataModal}
+        onClose={() => setShowQuickDataModal(false)}
+        shopId={getShopId()}
+        storeType={storeIdentifiers.storeType}
+        onImported={() => void loadProductsFromServer()}
+      />
     </div>
   );
 };

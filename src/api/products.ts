@@ -1,9 +1,10 @@
 // Products API Service
-import { apiRequest, uploadFiles } from './client';
-import type { 
-  Product, 
-  CreateProductRequest, 
-  UpdateProductRequest, 
+import { apiRequest, uploadFiles, getApiBaseUrl } from './client';
+import { isRetriableHttpStatus, isNetworkFailure } from '../utils/httpRetriable';
+import type {
+  Product,
+  CreateProductRequest,
+  UpdateProductRequest,
   ProductQueryParams,
   SimilarityCheckRequest,
   SimilarityCheckResponse,
@@ -40,6 +41,61 @@ export const createProduct = async (productData: CreateProductRequest) => {
     body: JSON.stringify(productData),
   });
 };
+
+interface PushProductResult {
+  success: boolean;
+  error?: string;
+  /** true si vale la pena reintentar más tarde (sin conexión, 5xx, timeout). */
+  retriable?: boolean;
+  /**
+   * `_id` real de Mongo del producto creado. El caller DEBE reemplazar el id
+   * local (numérico) por este valor y volver a guardar — si no, el próximo
+   * sync (`mergeProductsFromServerPreserveImages`) no reconoce que es el
+   * mismo producto (normalizeProductId hashea distinto un id numérico local
+   * que un `_id` de Mongo) y se pierde cualquier dato solo-local, como la
+   * foto cacheada. Ver docs — bug encontrado y arreglado en esta pasada.
+   */
+  serverId?: string;
+}
+
+/**
+ * Empuja un producto agregado localmente (ProductManagement "Agregar
+ * Producto") a POST /api/products — el mismo endpoint que ya dispara la
+ * promoción en tiempo real al catálogo modelo (dedup por barcode,
+ * ver docs/PROMOCION_TIEMPO_REAL_CATALOGO_MODELO.md). Antes, agregar un
+ * producto en este desktop era 100% local; nunca llegaba al servidor.
+ * `mainCategory` se manda vacío a propósito: el backend lo autoasigna desde
+ * el storeType de la tienda si viene vacío (products.ts:582), así este
+ * cliente no necesita duplicar ese mapeo.
+ */
+export async function pushLocalProductToServer(
+  payload: CreateProductRequest & { barcode?: string }
+): Promise<PushProductResult> {
+  try {
+    const url = `${getApiBaseUrl()}/products`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data?.success === false) {
+      return {
+        success: false,
+        error: data?.error || `Error ${response.status}`,
+        retriable: isRetriableHttpStatus(response.status),
+      };
+    }
+    const serverId = data?.data?._id ? String(data.data._id) : undefined;
+    return { success: true, serverId };
+  } catch (err) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : 'Error de conexión',
+      retriable: isNetworkFailure(err) || !navigator.onLine,
+    };
+  }
+}
 
 // Get product by ID
 export const getProductById = async (id: string) => {

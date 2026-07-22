@@ -79,7 +79,9 @@ import {
   getLastFullBackupTime,
   getFullBackupIntervalHours,
   setFullBackupIntervalHours,
+  getLastSyncTime,
 } from '../utils/syncService';
+import { getSyncValidityStatus, MAX_DAYS_WITHOUT_SYNC } from '../utils/syncValidity';
 import { runFullBackupSync } from '../services/fullBackupSyncService';
 import { getWhatsAppUrl } from '../constants/contact';
 import {
@@ -1461,12 +1463,43 @@ const Settings: React.FC<SettingsProps> = ({ isSetupMode, onSetupComplete }) => 
                 </button>
               </div>
             )}
-            {serverSync.lastSync && (
-              <div className="sync-status-row">
-                <span>Última sincronización:</span>
-                <span>{new Date(serverSync.lastSync).toLocaleString()}</span>
-              </div>
-            )}
+            {(() => {
+              const validity = getSyncValidityStatus();
+              const last = getLastSyncTime();
+              const lastLabel =
+                serverSync.lastSync ||
+                (last ? last.toISOString() : null);
+              return (
+                <>
+                  {lastLabel && (
+                    <div className="sync-status-row">
+                      <span>Última sincronización:</span>
+                      <span>{new Date(lastLabel).toLocaleString()}</span>
+                    </div>
+                  )}
+                  {validity.shopConfigured && (
+                    <div className="sync-status-row">
+                      <span>Vigencia sin sync:</span>
+                      <span
+                        style={{
+                          color:
+                            validity.daysRemaining <= 7
+                              ? '#f87171'
+                              : validity.daysRemaining <= 14
+                                ? '#fbbf24'
+                                : 'inherit',
+                          fontWeight: 600,
+                        }}
+                      >
+                        {validity.isExpired
+                          ? `Vencida (${validity.daysSinceSync} días sin sync)`
+                          : `${validity.daysRemaining} de ${MAX_DAYS_WITHOUT_SYNC} días restantes`}
+                      </span>
+                    </div>
+                  )}
+                </>
+              );
+            })()}
           </div>
         </div>
         
