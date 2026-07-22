@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import Jimp from 'jimp';
+import { Jimp, JimpMime, rgbaToInt } from 'jimp';
 import pngToIco from 'png-to-ico';
 
 // Create a simple SVG icon
@@ -33,13 +33,13 @@ fs.writeFileSync(path.join(buildDir, 'icon.svg'), svgIcon);
 async function generateIcons() {
   // Create 256x256 PNG with Jimp (gradient purple + white shapes)
   const size = 256;
-  const image = new Jimp(size, size);
+  const image = new Jimp({ width: size, height: size, color: 0x000000ff });
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const r = Math.floor(102 + (118 - 102) * (x / size));
       const g = Math.floor(126 + (75 - 126) * (x / size));
       const b = Math.floor(234 + (162 - 234) * (x / size));
-      image.setPixelColor(Jimp.rgbaToInt(r, g, b, 255), x, y);
+      image.setPixelColor(rgbaToInt(r, g, b, 255), x, y);
     }
   }
   // Draw white circle
@@ -50,11 +50,11 @@ async function generateIcons() {
     for (let x = 0; x < size; x++) {
       const dist = Math.sqrt((x - cx) ** 2 + (y - cy) ** 2);
       if (dist < radius) {
-        image.setPixelColor(Jimp.rgbaToInt(255, 255, 255, 230), x, y);
+        image.setPixelColor(rgbaToInt(255, 255, 255, 230), x, y);
       }
     }
   }
-  const pngBuffer = await image.getBufferAsync(Jimp.MIME_PNG);
+  const pngBuffer = await image.getBuffer(JimpMime.png);
   const pngPath = path.join(buildDir, 'icon.png');
   fs.writeFileSync(pngPath, pngBuffer);
 
