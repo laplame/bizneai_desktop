@@ -37,9 +37,11 @@ jobs:
         run: npm run build:server
 
       - name: Build Windows installer
-        run: npx electron-builder --win --x64
+        run: npx electron-builder --win --x64 --publish never
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Sin GH_TOKEN: evita que electron-builder intente publicar en Releases
+          # (usamos upload-artifact). Con GH_TOKEN presente intentaba publicar
+          # contra el "repository" de package.json (repo equivocado) y fallaba con 401.
           # Desactiva firma de código en CI (no hay certificado)
           CSC_IDENTITY_AUTO_DISCOVERY: false
 

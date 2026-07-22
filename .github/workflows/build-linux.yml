@@ -36,8 +36,11 @@ jobs:
       - name: Bundle local API (Electron embedded)
         run: npm run build:server
 
+      - name: Install Linux packaging tools
+        run: sudo apt-get update && sudo apt-get install -y fakeroot dpkg rpm
+
       - name: Build Linux (AppImage + deb)
-        run: npx electron-builder --linux --x64
+        run: npx electron-builder --linux --x64 --publish never
         # No GH_TOKEN: evita que electron-builder intente publicar en Releases (usamos upload-artifact)
 
       - name: Upload Linux artifacts
